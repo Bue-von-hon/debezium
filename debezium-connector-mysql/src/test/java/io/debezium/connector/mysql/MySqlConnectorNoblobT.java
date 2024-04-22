@@ -31,7 +31,7 @@ import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
  *
  * @author Bue-Von-Hun
  */
-public class MySqlConnectorNoblobT extends AbstractAsyncEngineConnectorTest {
+public class MySqlConnectorNoBlobIT extends AbstractAsyncEngineConnectorTest {
 
     private static final Path SCHEMA_HISTORY_PATH = Files.createTestingPath("file-schema-history-snapshot.txt").toAbsolutePath();
     protected static final UniqueDatabase DATABASE = new UniqueDatabase("logical_server_name", "connector_noblob_mode_test")
