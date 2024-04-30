@@ -188,13 +188,29 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
 
         /**
          * Never perform a snapshot and only receive logical changes.
+         * @deprecated to be removed in Debezium 3.0, replaced by {{@link #NO_DATA}}
          */
         NEVER("never"),
+
+        /**
+         * Never perform a snapshot and only receive logical changes.
+         */
+        NO_DATA("no_data"),
 
         /**
          * Perform a snapshot and then stop before attempting to receive any logical changes.
          */
         INITIAL_ONLY("initial_only"),
+
+        /**
+         * Perform a snapshot when it is needed.
+         */
+        WHEN_NEEDED("when_needed"),
+
+        /**
+         * Allows control over snapshots by setting connectors properties prefixed with 'snapshot.mode.configuration.based'.
+         */
+        CONFIGURATION_BASED("configuration_based"),
 
         /**
          * Inject a custom snapshotter, which allows for more control over snapshots.
@@ -976,8 +992,6 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
         this.replicaIdentityMapper = (replicaIdentityMapping != null) ? new ReplicaIdentityMapper(replicaIdentityMapping) : null;
         this.snapshotMode = SnapshotMode.parse(config.getString(SNAPSHOT_MODE), SNAPSHOT_MODE.defaultValueAsString());
         this.snapshotLockingMode = SnapshotLockingMode.parse(config.getString(SNAPSHOT_LOCKING_MODE), SNAPSHOT_LOCKING_MODE.defaultValueAsString());
-        this.snapshotQueryMode = SnapshotQueryMode.parse(config.getString(SNAPSHOT_QUERY_MODE), SNAPSHOT_QUERY_MODE.defaultValueAsString());
-        this.snapshotQueryModeCustomName = config.getString(SNAPSHOT_QUERY_MODE_CUSTOM_NAME, "");
     }
 
     protected String hostname() {
@@ -992,11 +1006,11 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
         return getConfig().getString(DATABASE_NAME);
     }
 
-    protected LogicalDecoder plugin() {
+    public LogicalDecoder plugin() {
         return LogicalDecoder.parse(getConfig().getString(PLUGIN_NAME));
     }
 
-    protected String slotName() {
+    public String slotName() {
         return getConfig().getString(SLOT_NAME);
     }
 
@@ -1081,12 +1095,14 @@ public class PostgresConnectorConfig extends RelationalDatabaseConnectorConfig {
         return Optional.ofNullable(this.replicaIdentityMapper);
     }
 
-    public SnapshotMode snapshotMode() {
+    @Override
+    public SnapshotMode getSnapshotMode() {
         return this.snapshotMode;
     }
 
-    public SnapshotLockingMode snapshotLockingMode() {
-        return this.snapshotLockingMode;
+    @Override
+    public Optional<SnapshotLockingMode> getSnapshotLockingMode() {
+        return Optional.of(this.snapshotLockingMode);
     }
 
     protected int moneyFractionDigits() {

@@ -56,6 +56,8 @@ import io.debezium.annotation.NotThreadSafe;
 import io.debezium.annotation.ThreadSafe;
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Field;
+import io.debezium.pipeline.source.snapshot.incremental.ChunkQueryBuilder;
+import io.debezium.pipeline.source.snapshot.incremental.DefaultChunkQueryBuilder;
 import io.debezium.relational.Attribute;
 import io.debezium.relational.Column;
 import io.debezium.relational.ColumnEditor;
@@ -65,6 +67,7 @@ import io.debezium.relational.TableId;
 import io.debezium.relational.Tables;
 import io.debezium.relational.Tables.ColumnNameFilter;
 import io.debezium.relational.Tables.TableFilter;
+import io.debezium.spi.schema.DataCollectionId;
 import io.debezium.util.BoundedConcurrentHashMap;
 import io.debezium.util.BoundedConcurrentHashMap.Eviction;
 import io.debezium.util.BoundedConcurrentHashMap.EvictionListener;
@@ -87,7 +90,7 @@ public class JdbcConnection implements AutoCloseable {
     private final static Logger LOGGER = LoggerFactory.getLogger(JdbcConnection.class);
     private static final int CONNECTION_VALID_CHECK_TIMEOUT_IN_SEC = 3;
     private final Map<String, PreparedStatement> statementCache = new BoundedConcurrentHashMap<>(STATEMENT_CACHE_CAPACITY, 16, Eviction.LIRS,
-            new EvictionListener<String, PreparedStatement>() {
+            new EvictionListener<>() {
 
                 @Override
                 public void onEntryEviction(Map<String, PreparedStatement> evicted) {
@@ -1167,13 +1170,13 @@ public class JdbcConnection implements AutoCloseable {
                     TableId tableId = new TableId(catalogName, schemaName, tableName);
                     if (tableFilter == null || tableFilter.isIncluded(tableId)) {
                         tableIds.add(tableId);
-                        attributesByTable.putAll(getAttributeDetails(tableId));
+                        attributesByTable.putAll(getAttributeDetails(tableId, tableType));
                     }
                 }
                 else {
                     TableId tableId = new TableId(catalogName, schemaName, tableName);
                     viewIds.add(tableId);
-                    attributesByTable.putAll(getAttributeDetails(tableId));
+                    attributesByTable.putAll(getAttributeDetails(tableId, tableType));
                 }
             }
         }
@@ -1262,7 +1265,7 @@ public class JdbcConnection implements AutoCloseable {
         return columnsByTable;
     }
 
-    protected Map<TableId, List<Attribute>> getAttributeDetails(TableId tableId) {
+    protected Map<TableId, List<Attribute>> getAttributeDetails(TableId tableId, String tableType) {
         // no-op, allows connectors to populate table attributes during relational table creation
         return Collections.emptyMap();
     }
@@ -1484,6 +1487,10 @@ public class JdbcConnection implements AutoCloseable {
         }
     }
 
+    public <T extends DataCollectionId> ChunkQueryBuilder<T> chunkQueryBuilder(RelationalDatabaseConnectorConfig connectorConfig) {
+        return new DefaultChunkQueryBuilder<T>(connectorConfig, this);
+    }
+
     public String buildSelectWithRowLimits(TableId tableId, int limit, String projection, Optional<String> condition,
                                            Optional<String> additionalCondition, String orderBy) {
         final StringBuilder sql = new StringBuilder("SELECT ");
@@ -1510,6 +1517,15 @@ public class JdbcConnection implements AutoCloseable {
                 .append(" LIMIT ")
                 .append(limit);
         return sql.toString();
+    }
+
+    /**
+     * Indicates how NULL values are sorted by default in an ORDER BY clause.  The ANSI standard doesn't really specify.
+     *
+     * @return true if NULL is sorted after non-NULL values; false if NULL is sorted before non-NULL values; empty if we don't know for this connector.
+     */
+    public Optional<Boolean> nullsSortLast() {
+        return Optional.empty();
     }
 
     /**
@@ -1623,5 +1639,4 @@ public class JdbcConnection implements AutoCloseable {
         });
         return results;
     }
-
 }

@@ -104,16 +104,12 @@ public class OpenLogReplicatorStreamingChangeEventSource implements StreamingCha
     @Override
     public void execute(ChangeEventSourceContext context, OraclePartition partition, OracleOffsetContext offsetContext) throws InterruptedException {
 
-        if (!snapshotterService.getSnapshotter().shouldStream()) {
-            LOGGER.info("Streaming is not enabled in current configuration");
-            return;
-        }
         try {
             this.partition = partition;
             this.offsetContext = offsetContext;
             this.jdbcConnection.setAutoCommit(false);
 
-            final Scn startScn = offsetContext.getScn();
+            final Scn startScn = connectorConfig.getAdapter().getOffsetScn(offsetContext);
             final Long startScnIndex = offsetContext.getScnIndex();
 
             this.client = new OlrNetworkClient(connectorConfig);

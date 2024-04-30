@@ -6,8 +6,12 @@
 
 package io.debezium.connector.sqlserver;
 
+import java.io.Reader;
+import java.io.StringReader;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.NClob;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -32,12 +36,16 @@ import org.slf4j.LoggerFactory;
 
 import com.microsoft.sqlserver.jdbc.SQLServerDriver;
 
+import io.debezium.DebeziumException;
 import io.debezium.annotation.VisibleForTesting;
+import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.config.Field;
 import io.debezium.data.Envelope;
 import io.debezium.jdbc.JdbcConfiguration;
 import io.debezium.jdbc.JdbcConnection;
+import io.debezium.pipeline.spi.OffsetContext;
+import io.debezium.pipeline.spi.Partition;
 import io.debezium.relational.Column;
 import io.debezium.relational.Table;
 import io.debezium.relational.TableId;
@@ -102,6 +110,7 @@ public class SqlServerConnection extends JdbcConnection {
             " FROM ordered_change_tables WHERE ct_sequence = 1";
 
     private static final String GET_NEW_CHANGE_TABLES = "SELECT * FROM [#db].cdc.change_tables WHERE start_lsn BETWEEN ? AND ?";
+    private static final String GET_MIN_LSN_FROM_ALL_CHANGE_TABLES = "select min(start_lsn) from [#db].cdc.change_tables";
     private static final String OPENING_QUOTING_CHARACTER = "[";
     private static final String CLOSING_QUOTING_CHARACTER = "]";
 
@@ -428,6 +437,7 @@ public class SqlServerConnection extends JdbcConnection {
     }
 
     public static class CdcEnabledTable {
+
         private final String tableId;
         private final String captureName;
         private final Lsn fromLsn;
@@ -449,6 +459,7 @@ public class SqlServerConnection extends JdbcConnection {
         public Lsn getFromLsn() {
             return fromLsn;
         }
+
     }
 
     public List<SqlServerChangeTable> getChangeTables(String databaseName) throws SQLException {
@@ -599,6 +610,68 @@ public class SqlServerConnection extends JdbcConnection {
         }
     }
 
+    // NOTE: fix for DBZ-7359
+    @Override
+    public void setQueryColumnValue(PreparedStatement statement, Column column, int pos, Object value) throws SQLException {
+        if (column.typeUsesCharset()) {
+            // For mappings between sqlserver and JDBC types see -
+            // https://learn.microsoft.com/en-us/sql/connect/jdbc/using-basic-data-types?view=sql-server-ver16
+            // For details on the methods to use with respect to the `sendStringParametersAsUnicode` JDBC property, see -
+            // https://learn.microsoft.com/en-us/sql/connect/jdbc/setting-the-connection-properties?view=sql-server-ver16
+            // "An application should use the setNString, setNCharacterStream, and setNClob national character methods
+            // of the SQLServerPreparedStatement and SQLServerCallableStatement classes for the NCHAR, NVARCHAR, and
+            // LONGNVARCHAR JDBC data types."
+            switch (column.jdbcType()) {
+                case Types.NCHAR:
+                    if (value instanceof String) {
+                        statement.setNString(pos, (String) value);
+                    }
+                    else {
+                        // not set, fall back on default implementation.
+                        super.setQueryColumnValue(statement, column, pos, value);
+                    }
+                    break;
+                case Types.NVARCHAR:
+                    if (value instanceof String) {
+                        statement.setNCharacterStream(pos, new StringReader((String) value));
+                    }
+                    else if (value instanceof Reader) {
+                        statement.setNCharacterStream(pos, (Reader) value);
+                    }
+                    else {
+                        // not set, fall back on default implementation.
+                        super.setQueryColumnValue(statement, column, pos, value);
+                    }
+                    break;
+                case Types.LONGNVARCHAR:
+                    if (value instanceof String) {
+                        // we'll fall back on nvarchar handling
+                        statement.setNCharacterStream(pos, new StringReader((String) value));
+                    }
+                    else if (value instanceof Reader) {
+                        // we'll fall back on nvarchar handling
+                        statement.setNCharacterStream(pos, (Reader) value);
+                    }
+                    else if (value instanceof NClob) {
+                        statement.setNClob(pos, (NClob) value);
+                    }
+                    else {
+                        // not set, fall back on default implementation.
+                        super.setQueryColumnValue(statement, column, pos, value);
+                    }
+                    break;
+                default:
+                    // not set, fall back on default implementation.
+                    super.setQueryColumnValue(statement, column, pos, value);
+                    break;
+            }
+        }
+        else {
+            // not set, fall back on default implementation.
+            super.setQueryColumnValue(statement, column, pos, value);
+        }
+    }
+
     @Override
     public String buildSelectWithRowLimits(TableId tableId, int limit, String projection, Optional<String> condition,
                                            Optional<String> additionalCondition, String orderBy) {
@@ -633,6 +706,13 @@ public class SqlServerConnection extends JdbcConnection {
     }
 
     @Override
+    public Optional<Boolean> nullsSortLast() {
+        // "Null values are treated as the lowest possible values"
+        // https://learn.microsoft.com/en-us/sql/t-sql/queries/select-order-by-clause-transact-sql?view=sql-server-ver16
+        return Optional.of(false);
+    }
+
+    @Override
     public String quotedTableIdString(TableId tableId) {
         return "[" + tableId.catalog() + "].[" + tableId.schema() + "].[" + tableId.table() + "]";
     }
@@ -655,5 +735,31 @@ public class SqlServerConnection extends JdbcConnection {
     public Optional<Instant> getCurrentTimestamp() throws SQLException {
         return queryAndMap("SELECT SYSDATETIMEOFFSET()",
                 rs -> rs.next() ? Optional.of(rs.getObject(1, OffsetDateTime.class).toInstant()) : Optional.empty());
+    }
+
+    public boolean validateLogPosition(Partition partition, OffsetContext offset, CommonConnectorConfig config) {
+
+        final Lsn storedLsn = ((SqlServerOffsetContext) offset).getChangePosition().getCommitLsn();
+
+        final String oldestFirstChangeQuery = replaceDatabaseNamePlaceholder(GET_MIN_LSN_FROM_ALL_CHANGE_TABLES, ((SqlServerPartition) partition).getDatabaseName());
+
+        try {
+
+            final String oldestScn = singleOptionalValue(oldestFirstChangeQuery, rs -> rs.getString(1));
+
+            if (oldestScn == null) {
+                return false;
+            }
+
+            LOGGER.trace("Oldest SCN in logs is '{}'", oldestScn);
+            return storedLsn == null || Lsn.valueOf(oldestScn).compareTo(storedLsn) < 0;
+        }
+        catch (SQLException e) {
+            throw new DebeziumException("Unable to get last available log position", e);
+        }
+    }
+
+    public <T> T singleOptionalValue(String query, ResultSetExtractor<T> extractor) throws SQLException {
+        return queryAndMap(query, rs -> rs.next() ? extractor.apply(rs) : null);
     }
 }

@@ -68,21 +68,50 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
     public enum SnapshotMode implements EnumeratedValue {
 
         /**
-         * Always perform an initial snapshot when starting.
+         * Performs a snapshot of data and schema upon each connector start.
          */
-        INITIAL("initial", true),
+        ALWAYS("always"),
+
+        /**
+         * Perform a snapshot only upon initial startup of a connector.
+         */
+        INITIAL("initial"),
+
+        /**
+         * Never perform a snapshot and only receive new data changes.
+         * @deprecated to be removed in Debezium 3.0, replaced by {{@link #NO_DATA}}
+         */
+        NEVER("never"),
 
         /**
          * Never perform a snapshot and only receive new data changes.
          */
-        NEVER("never", false);
+        NO_DATA("no_data"),
+
+        /**
+         * Perform a snapshot and then stop before attempting to receive any logical changes.
+         */
+        INITIAL_ONLY("initial_only"),
+
+        /**
+         * Perform a snapshot when it is needed.
+         */
+        WHEN_NEEDED("when_needed"),
+
+        /**
+         * Allows control over snapshots by setting connectors properties prefixed with 'snapshot.mode.configuration.based'.
+         */
+        CONFIGURATION_BASED("configuration_based"),
+
+        /**
+         * Inject a custom snapshotter, which allows for more control over snapshots.
+         */
+        CUSTOM("custom");
 
         private final String value;
-        private final boolean includeData;
 
-        SnapshotMode(String value, boolean includeData) {
+        SnapshotMode(String value) {
             this.value = value;
-            this.includeData = includeData;
         }
 
         @Override
@@ -904,7 +933,7 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
                     + "'never': The connector does not run a snapshot. Upon first startup, the connector immediately begins reading from the beginning of the oplog.");
 
     public static final Field SNAPSHOT_FILTER_QUERY_BY_COLLECTION = Field.create("snapshot.collection.filter.overrides")
-            .withDisplayName("Snapshot mode")
+            .withDisplayName("Snapshot collection filter overrides")
             .withType(Type.STRING)
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_SNAPSHOT, 1))
             .withWidth(Width.LONG)
@@ -1020,8 +1049,6 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
     public static ConfigDef configDef() {
         return CONFIG_DEFINITION.configDef();
     }
-
-    protected static Field.Set EXPOSED_FIELDS = ALL_FIELDS;
 
     private final SnapshotMode snapshotMode;
     private final CaptureMode captureMode;
@@ -1234,6 +1261,11 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
 
     public SnapshotMode getSnapshotMode() {
         return snapshotMode;
+    }
+
+    @Override
+    public Optional<EnumeratedValue> getSnapshotLockingMode() {
+        return Optional.empty();
     }
 
     /**

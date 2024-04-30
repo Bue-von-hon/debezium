@@ -134,6 +134,7 @@ You can find more information about snapshots in the following sections:
 * xref:debezium-sqlserver-incremental-snapshots[]
 endif::product[]
 
+[[default-workflow-for-performing-an-initial-snapshot]]
 .Default workflow that the {prodname} SQL Server connector uses to perform an initial snapshot
 
 The following workflow lists the steps that {prodname} takes to create a snapshot.
@@ -188,6 +189,60 @@ After the snapshot process begins, if the process is interrupted due to connecto
 After the connector completes the initial snapshot, it continues streaming from the position that it read in Step 4 so that it does not miss any updates.
 
 If the connector stops again for any reason, after it restarts, it resumes streaming changes from where it previously left off.
+
+[id="sqlserver-connector-snapshot-mode-options"]
+.Settings for `snapshot.mode` connector configuration property
+[cols="30%a,70%a",options="header"]
+|===
+|Setting |Description
+
+|`always`
+|Perform snapshot on each connector start.
+After the snapshot completes, the connector begins to stream event records for subsequent database changes.
+
+|`initial`
+|The connector performs a database snapshot as described in the xref:default-workflow-for-performing-an-initial-snapshot[default workflow for creating an initial snapshot].
+After the snapshot completes, the connector begins to stream event records for subsequent database changes.
+
+|`initial_only`
+|The connector performs a database snapshot and stops before streaming any change event records, not allowing any subsequent change events to be captured.
+
+|`schema_only`
+|Deprecated, see `no_data`.
+
+|`no_data`
+|The connector captures the structure of all relevant tables, performing all the steps described in the xref:default-workflow-for-performing-an-initial-snapshot[default snapshot workflow], except that it does not create `READ` events to represent the data set at the point of the connector's start-up (Step 7.b).
+
+|`recovery`
+|Set this option to restore a database schema history topic that is lost or corrupted.
+After a restart, the connector runs a snapshot that rebuilds the topic from the source tables.
+You can also set the property to periodically prune a database schema history topic that experiences unexpected growth. +
++
+WARNING: Do not use this mode to perform a snapshot if schema changes were committed to the database after the last connector shutdown.
+
+|`when_needed`
+|After the connector starts, it performs a snapshot only if it detects one of the following circumstances:
+
+* It cannot detect any topic offsets.
+* A previously recorded offset specifies a log position that is not available on the server.
+
+ifdef::community[]
+|`configuration_based`
+|Set the snapshot mode to `configuration_based` to control snapshot behavior through the set of connector properties that have the prefix 'snapshot.mode.configuration.based'.
+endif::community[]
+
+ifdef::community[]
+|`custom`
+|The `custom` snapshot mode lets you inject your own implementation of the `io.debezium.spi.snapshot.Snapshotter` interface.
+Set the `snapshot.mode.custom.name` configuration property to the name provided by the `name()` method of your implementation.
+The name is specified on the classpath of your Kafka Connect cluster.
+If you use the {prodname} `EmbeddedEngine`, the name is included in the connector JAR file.
+For more information, see xref:connector-custom-snapshot[custom snapshotter SPI].
+endif::community[]
+
+|===
+
+For more information, see xref:sqlserver-property-snapshot-mode[`snapshot.mode`] in the table of connector configuration properties.
 
 // ModuleID: sqlserver-description-of-why-initial-snapshots-capture-the-schema-history-for-all-tables
 // Title: Description of why initial snapshots capture the schema history for all tables
@@ -354,6 +409,18 @@ include::{partialsdir}/modules/all-connectors/con-connector-ad-hoc-snapshots.ado
 [id="sqlserver-incremental-snapshots"]
 === Incremental snapshots
 
+.SQL Server collations
+[WARNING]
+====
+Each SQL Server server or database is configured to use a specific https://learn.microsoft.com/en-us/sql/relational-databases/collations/collation-and-unicode-support?view=sql-server-ver16#Collation_Defn[collation], which determines how character data is stored, sorted, compared, and displayed.
+The sorting rules for some collation sets, such as the https://learn.microsoft.com/en-us/sql/relational-databases/collations/collation-and-unicode-support?view=sql-server-ver16#SQL-collations[SQL Server collations (SQL_*)] are not compatible with the Unicode sorting algorithm.
+In some cases, the incompatible sorting rules can lead to lost data when the connector runs an ad hoc snapshot.
+For example, if SQL Server is configured to send strings as Unicode (that is, the connection property `sendStringParametersAsUnicode` is set to `true`), the connector can skip records during the snapshot.
+To protect against lost data during an ad hoc snapshot, set the value of the `driver.sendStringParametersAsUnicode` connection string property to `false`.
+
+For more information about using the `sendStringParametersAsUnicode` property, see the https://learn.microsoft.com/en-us/sql/connect/jdbc/setting-the-connection-properties?view=sql-server-ver16[SQL Server connection properties documentation].
+====
+
 include::{partialsdir}/modules/all-connectors/con-connector-incremental-snapshot.adoc[leveloffset=+1]
 
 [WARNING]
@@ -389,9 +456,15 @@ include::{partialsdir}/modules/all-connectors/proc-stopping-an-incremental-snaps
 
 include::{partialsdir}/modules/all-connectors/proc-stopping-an-incremental-snapshot-kafka.adoc[leveloffset=+1]
 
+ifdef::community[]
+[[connector-custom-snapshot]]
+=== Custom snapshotter SPI
+include::{partialsdir}/modules/all-connectors/custom-snapshotter-spi.adoc[leveloffset=+3]
+endif::community[]
+
 // Type: concept
 [id="sqlserver-blocking-snapshots"]
-==== Blocking snapshots
+=== Blocking snapshots
 
 include::{partialsdir}/modules/all-connectors/con-connector-blocking-snapshot.adoc[leveloffset=+3]
 
@@ -2275,13 +2348,12 @@ spec:
     database.port: 1433 // <4>
     database.user: debezium // <5>
     database.password: dbz // <6>
-    database.names: testDB1,testDB2 // <7>
-    topic.prefix: inventory-connector-{context} // <8>
-    table.include.list: dbo.customers // <9>
-    schema.history.internal.kafka.bootstrap.servers: my-cluster-kafka-bootstrap:9092 // <10>
-    schema.history.internal.kafka.topic: schemahistory.fullfillment // <11>
-    database.ssl.truststore: path/to/trust-store // <12>
-    database.ssl.truststore.password: password-for-trust-store <13>
+    topic.prefix: inventory-connector-{context} // <7>
+    table.include.list: dbo.customers // <8>
+    schema.history.internal.kafka.bootstrap.servers: my-cluster-kafka-bootstrap:9092 // <9>
+    schema.history.internal.kafka.topic: schemahistory.fullfillment // <10>
+    database.ssl.truststore: path/to/trust-store // <11>
+    database.ssl.truststore.password: password-for-trust-store <12>
 ----
 +
 .Descriptions of connector configuration settings
@@ -2308,25 +2380,22 @@ spec:
 |The password for the SQL Server user.
 
 |7
-|The name of the database to capture changes from.
-
-|8
 |The topic prefix for the SQL Server instance/cluster, which forms a namespace and is used in all the names of the Kafka topics to which the connector writes, the Kafka Connect schema names, and the namespaces of the corresponding Avro schema when the {link-prefix}:{link-avro-serialization}#avro-serialization[Avro converter] is used.
 
-|9
+|8
 |The connector captures changes from the `dbo.customers` table only.
 
-|10
+|9
 |The list of Kafka brokers that this connector will use to write and recover DDL statements to the database schema history topic.
 
-|11
+|10
 |The name of the database schema history topic where the connector will write and recover DDL statements. This topic is for internal use only and should not be used by consumers.
 
-|12
+|11
 |The path to the SSL truststore that stores the server's signer certificates.
 This property is required unless database encryption is disabled (`database.encrypt=false`).
 
-|13
+|12
 |The SSL truststore password.
 This property is required unless database encryption is disabled (`database.encrypt=false`).
 
@@ -2793,9 +2862,124 @@ For example, +
 Once the snapshot is complete, the connector will continue reading change events from the database's redo logs.
 The following values are supported:
 
-* `initial`: Takes a snapshot of structure and data of captured tables; useful if topics should be populated with a complete representation of the data from the captured tables. +
-* `initial_only`: Takes a snapshot of structure and data like `initial` but instead does not transition into streaming changes once the snapshot has completed. +
-* `schema_only`: Takes a snapshot of the structure of captured tables only; useful if only changes happening from now onwards should be propagated to topics.
+`always`:: Perform snapshot on each connector start.
+After the snapshot completes, the connector begins to stream event records for subsequent database changes.
+
+`initial`:: The connector performs a database snapshot as described in the xref:default-workflow-for-performing-an-initial-snapshot[default workflow for creating an initial snapshot].
+After the snapshot completes, the connector begins to stream event records for subsequent database changes.
+
+`initial_only`:: The connector performs a database snapshot and stops before streaming any change event records, not allowing any subsequent change events to be captured.
+
+`schema_only`:: Deprecated, see `no_data`.
+
+`no_data`:: The connector captures the structure of all relevant tables, performing all the steps described in the xref:default-workflow-for-performing-an-initial-snapshot[default snapshot workflow], except that it does not create `READ` events to represent the data set at the point of the connector's start-up (Step 7.b).
+
+`recovery`:: Set this option to restore a database schema history topic that is lost or corrupted.
+After a restart, the connector runs a snapshot that rebuilds the topic from the source tables.
+You can also set the property to periodically prune a database schema history topic that experiences unexpected growth. +
++
+WARNING: Do not use this mode to perform a snapshot if schema changes were committed to the database after the last connector shutdown.
+
+`when_needed`:: After the connector starts, it performs a snapshot only if it detects one of the following circumstances:
+
+* It cannot detect any topic offsets.
+* A previously recorded offset specifies a log position that is not available on the server.
+
+ifdef::community[]
+`configuration_based`:: With this option, you control snapshot behavior through a set of connector properties that have the prefix 'snapshot.mode.configuration.based'.
+endif::community[]
+
+ifdef::community[]
+`custom`:: The `custom` snapshot mode lets you inject your own implementation of the `io.debezium.spi.snapshot.Snapshotter` interface.
+Set the `snapshot.mode.custom.name` configuration property to the name provided by the `name()` method of your implementation.
+
+For more information, see xref:connector-custom-snapshot[custom snapshotter SPI].
+endif::community[]
+
+ifdef::community[]
+|[[sqlserver-property-snapshot-mode-configuration-based-snapshot-data]]<<sqlserver-property-configuration-based-snapshot-data, `+snapshot.mode.configuration.based.snapshot.data+`>>
+|false
+|If the `snapshot.mode` is set to `configuration_based`, set this property to specify whether the connector includes table data when it performs a snapshot.
+endif::community[]
+
+ifdef::community[]
+|[[sqlserver-property-snapshot-mode-configuration-based-snapshot-schema]]<<sqlserver-property-configuration-based-snapshot-schema, `+snapshot.mode.configuration.based.snapshot.schema+`>>
+|false
+|If the `snapshot.mode` is set to `configuration_based`, set this property to specify whether the connector includes the table schema when it performs a snapshot.
+endif::community[]
+
+ifdef::community[]
+|[[sqlserver-property-snapshot-mode-configuration-based-start-stream]]<<sqlserver-property-configuration-based-start-stream, `+snapshot.mode.configuration.based.start.stream+`>>
+|false
+|If the `snapshot.mode` is set to `configuration_based`, set this property to specify whether the connector begins to stream change events after a snapshot completes.
+endif::community[]
+
+ifdef::community[]
+|[[sqlserver-property-snapshot-mode-configuration-based-snapshot-on-schema-error]]<<sqlserver-property-configuration-based-snapshot-on-schema-error, `+snapshot.mode.configuration.based.snapshot.on.schema.error+`>>
+|false
+|If the `snapshot.mode` is set to `configuration_based`, set this property to specify whether the connector includes table schema in a snapshot if the schema history topic is not available.
+endif::community[]
+
+ifdef::community[]
+|[[sqlserver-property-snapshot-mode-configuration-based-snapshot-on-data-error]]<<sqlserver-property-configuration-based-snapshot-on-data-error, `+snapshot.mode.configuration.based.snapshot.on.data.error+`>>
+|false
+|If the `snapshot.mode` is set to `configuration_based`, this property specifies whether the connector attempts to snapshot table data if it does not find the last committed offset in the transaction log. +
+Set the value to `true` to instruct the connector to perform a new snapshot.
+endif::community[]
+
+ifdef::community[]
+|[[sqlserver-property-snapshot-mode-custom-name]]<<sqlserver-property-snapshot-mode-custom-name, `+snapshot.mode.custom.name+`>>
+|No default
+|If `snapshot.mode` is set to `custom`, use this setting to specify the name of the custom implementation that is provided in the `name()` method that is defined in the 'io.debezium.spi.snapshot.Snapshotter' interface.
+After a connector restart, {prodname} calls the specified custom implementation to determine whether to perform a snapshot.
+For more information, see xref:connector-custom-snapshot[custom snapshotter SPI].
+endif::community[]
+
+|[[sqlserver-property-snapshot-locking-mode]]<<sqlserver-property-snapshot-locking-mode, `+snapshot.locking.mode+`>>
+|_exclusive_
+a|Controls whether and for how long the connector holds a table lock. Table locks prevent certain types of changes table operations from occurring while the connector performs a snapshot.
+You can set the following values:
+
+`exclusive`:: Controls how the connector holds locks on tables while performing the schema snapshot when `snapshot.isolation.mode` is `REPEATABLE_READ` or `EXCLUSIVE`. +
+The connector will hold a table lock for exclusive table access for just the initial portion of the snapshot
+while the database schemas and other metadata are being read. The remaining work in a snapshot involves selecting all rows from
+each table, and this is done using a flashback query that requires no locks. However, in some cases it may be desirable to avoid
+locks entirely which can be done by specifying `none`. This mode is only safe to use if no schema changes are happening while the
+snapshot is taken.
+
+`none`:: Prevents the connector from acquiring any table locks during the snapshot.
+Use this setting only if no schema changes might occur during the creation of the snapshot.
+
+ifdef::community[]
+`custom`:: The connector performs a snapshot according to the implementation specified by the xref:sqlserver-property-snapshot-locking-mode-custom-name[`snapshot.locking.mode.custom.name`] property, which is a custom implementation of the `io.debezium.spi.snapshot.SnapshotLock` interface.
+endif::community[]
+
+ifdef::community[]
+|[[sqlserver-property-snapshot-locking-mode-custom-name]]<<sqlserver-property-snapshot-locking-mode-custom-name, `+snapshot.locking.mode.custom.name+`>>
+|No default
+| When `snapshot.locking.mode` is set as `custom`, use this setting to specify the name of the custom implementation provided in the `name()` method that is defined by the 'io.debezium.spi.snapshot.SnapshotLock' interface.
+For more information, see xref:connector-custom-snapshot[custom snapshotter SPI].
+endif::community[]
+
+|[[sqlserver-property-snapshot-query-mode]]<<sqlserver-property-snapshot-query-mode, `+snapshot.query.mode+`>>
+|`select_all`
+|Specifies how the connector queries data while performing a snapshot. +
+Set one of the following options:
+
+`select_all`:: The connector performs a `select all` query by default, optionally adjusting the columns selected based on the column include and exclude list configurations.
+
+ifdef::community[]
+`custom`:: The connector performs a snapshot query according to the implementation specified by the xref:sqlserver-property-snapshot-snapshot-query-mode-custom-name[`snapshot.query.mode.custom.name`] property, which defines a custom implementation of the `io.debezium.spi.snapshot.SnapshotQuery` interface. +
+endif::community[]
+
+This setting enables you to manage snapshot content in a more flexible manner compared to using the xref:sqlserver-property-snapshot-select-statement-overrides[`snapshot.select.statement.overrides`] property.
+
+ifdef::community[]
+|[[sqlserver-property-snapshot-snapshot-query-mode-custom-name]]<<sqlserver-property-snapshot-query-mode-custom-name, `+snapshot.query.mode.custom.name+`>>
+|No default
+| When xref:sqlserver-property-snapshot-query-mode[`snapshot.query.mode`] is set to `custom`, use this setting to specify the name of the custom implementation provided in the `name()` method that is defined by the 'io.debezium.spi.snapshot.SnapshotQuery' interface.
+For more information, see xref:connector-custom-snapshot[custom snapshotter SPI].
+endif::community[]
 
 |[[sqlserver-property-snapshot-include-collection-list]]<<sqlserver-property-snapshot-include-collection-list, `+snapshot.include.collection.list+`>>
 | All tables specified in `table.include.list`
@@ -3003,10 +3187,10 @@ No entry is created for the signal to close the snapshot window.
 Set this option to prevent rapid growth of the signaling data collection.
 
 |[[sqlserver-property-max-iteration-transactions]]<<sqlserver-property-max-iteration-transactions, `+max.iteration.transactions+`>>
-|0
+|500
 |Specifies the maximum number of transactions per iteration to be used to reduce the memory footprint when streaming changes from multiple tables in a database.
-When set to `0` (the default), the connector uses the current maximum LSN as the range to fetch changes from.
-When set to a value greater than zero, the connector uses the n-th LSN specified by this setting as the range to fetch changes from.
+When set to `0`, the connector uses the current maximum LSN as the range to fetch changes from.
+When set to a value greater than zero, the connector uses the n-th LSN specified by this setting as the range to fetch changes from. Defaults to 500.
 
 |[[sqlserver-property-incremental-snapshot-option-recompile]]<<sqlserver-property-incremental-snapshot-option-recompile, `+incremental.snapshot.option.recompile+`>>
 |`false`
@@ -3067,7 +3251,16 @@ endif::product[]
 
 |[[sqlserver-property-errors-max-retires]]<<sqlserver-property-errors-max-retires, `errors.max.retries`>>
 |`-1`
-|The maximum number of retries on retriable errors (e.g. connection errors) before failing (-1 = no limit, 0 = disabled, > 0 = num of retries).
+|Specifies how the connector responds after an operation that results in a retriable error, such as a connection error. +
+Set one of the following options:
+
+`-1`:: No limit. The connector always restarts automatically, and retries the operation, regardless of the number of previous failures.
+
+`0`:: Disabled. The connector fails immediately, and never retries the operation.
+User intervention is required to restart the connector.
+
+`> 0`:: The connector restarts automatically until it reaches the specified maximum number of retries.
+After the next failure, the connector stops, and user intervention is required to restart it.
 
 |[[sqlserver-property-data-query-mode]]<<sqlserver-property-data-query-mode, `data.query.mode`>>
 |`function`

@@ -92,17 +92,21 @@ public class SqlServerConnectorTask extends BaseSourceTask<SqlServerPartition, S
                 new SqlServerPartition.Provider(connectorConfig),
                 new SqlServerOffsetContext.Loader(connectorConfig));
 
-        schema.recover(offsets);
-
         // Manual Bean Registration
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CONFIGURATION, config);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.CONNECTOR_CONFIG, connectorConfig);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.DATABASE_SCHEMA, schema);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.JDBC_CONNECTION, metadataConnection);
         connectorConfig.getBeanRegistry().add(StandardBeanNames.VALUE_CONVERTER, valueConverters);
+        connectorConfig.getBeanRegistry().add(StandardBeanNames.OFFSETS, offsets);
 
         // Service providers
         registerServiceProviders(connectorConfig.getServiceRegistry());
+
+        final SnapshotterService snapshotterService = connectorConfig.getServiceRegistry().tryGetService(SnapshotterService.class);
+
+        validateAndLoadSchemaHistory(connectorConfig, dataConnection::validateLogPosition, offsets, schema,
+                snapshotterService.getSnapshotter());
 
         taskContext = new SqlServerTaskContext(connectorConfig, schema);
 
@@ -138,8 +142,6 @@ public class SqlServerConnectorTask extends BaseSourceTask<SqlServerPartition, S
 
         NotificationService<SqlServerPartition, SqlServerOffsetContext> notificationService = new NotificationService<>(getNotificationChannels(),
                 connectorConfig, SchemaFactory.get(), dispatcher::enqueueNotification);
-
-        SnapshotterService snapshotterService = null; // TODO with DBZ-7303
 
         ChangeEventSourceCoordinator<SqlServerPartition, SqlServerOffsetContext> coordinator = new SqlServerChangeEventSourceCoordinator(
                 offsets,
@@ -207,4 +209,5 @@ public class SqlServerConnectorTask extends BaseSourceTask<SqlServerPartition, S
     protected Iterable<Field> getAllConfigurationFields() {
         return SqlServerConnectorConfig.ALL_FIELDS;
     }
+
 }

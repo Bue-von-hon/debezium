@@ -17,6 +17,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
@@ -70,6 +71,7 @@ import io.debezium.engine.StopEngineException;
 import io.debezium.engine.format.ChangeEventFormat;
 import io.debezium.engine.format.KeyValueChangeEventFormat;
 import io.debezium.engine.format.KeyValueHeaderChangeEventFormat;
+import io.debezium.engine.source.DebeziumSourceConnectorContext;
 import io.debezium.engine.source.EngineSourceConnector;
 import io.debezium.engine.source.EngineSourceConnectorContext;
 import io.debezium.engine.source.EngineSourceTask;
@@ -146,7 +148,13 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
 
         // Create thread pools for executing tasks and record pipelines.
         taskService = Executors.newFixedThreadPool(this.config.getInteger(ConnectorConfig.TASKS_MAX_CONFIG, () -> 1));
-        recordService = Executors.newFixedThreadPool(computeRecordThreads(this.config.getString(AsyncEmbeddedEngine.RECORD_PROCESSING_THREADS)));
+        final String processingThreads = this.config.getString(AsyncEmbeddedEngine.RECORD_PROCESSING_THREADS);
+        if (processingThreads == null || processingThreads.isBlank()) {
+            recordService = Executors.newCachedThreadPool();
+        }
+        else {
+            recordService = Executors.newFixedThreadPool(computeRecordThreads(processingThreads));
+        }
 
         // Validate provided config and prepare Kafka worker config needed for Kafka stuff, like e.g. OffsetStore.
         if (!this.config.validateAndRecord(AsyncEngineConfig.CONNECTOR_FIELDS, LOGGER::error)) {
@@ -335,7 +343,7 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
         final OffsetStorageWriter offsetWriter = new OffsetStorageWriter(offsetStore, engineName, offsetKeyConverter, offsetValueConverter);
 
         LOGGER.debug("Initializing Connect connector itself");
-        connector.initialize(new EngineSourceConnectorContext(this, offsetReader, offsetWriter));
+        connector.initialize(new EngineSourceConnectorContext(this, offsetStore, offsetReader, offsetWriter));
 
         return connectorConfig;
     }
@@ -395,7 +403,7 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
         }
 
         final long taskStartupTimeout = config.getLong(AsyncEngineConfig.TASK_MANAGEMENT_TIMEOUT_MS);
-        LOGGER.debug("Waiting max. for {} ms for individual source tasks to start.", taskStartupTimeout);
+        LOGGER.info("Waiting max. for {} ms for individual source tasks to start.", taskStartupTimeout);
         final int nTasks = tasks.size();
         Exception error = null;
         int failedTasks = 0;
@@ -459,7 +467,7 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
             try {
                 taskCompletionService.take().get();
             }
-            catch (InterruptedException e) {
+            catch (InterruptedException | CancellationException e) {
                 LOGGER.info("Task interrupted while polling.");
             }
             LOGGER.debug("Task #{} out of {} tasks has stopped polling.", i, tasks.size());
@@ -540,10 +548,13 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
         LOGGER.debug("Stopping records service.");
         final long shutdownTimeout = config.getLong(AsyncEngineConfig.RECORD_PROCESSING_SHUTDOWN_TIMEOUT_MS);
         try {
+            recordService.shutdown();
             recordService.awaitTermination(shutdownTimeout, TimeUnit.MILLISECONDS);
         }
         catch (InterruptedException e) {
             LOGGER.info("Timed out while waiting for record service shutdown. Shutting it down immediately.");
+        }
+        finally {
             recordService.shutdownNow();
         }
     }
@@ -616,6 +627,27 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
     }
 
     /**
+     * Stops {@link OffsetBackingStore} used by engine if there is any.
+     * If engine fails during initialization phase before connector context is created, the reference may be {@code null} and in such this method does nothing.
+     *
+     * @param connectorContext {@link DebeziumSourceConnectorContext} used by the connector or {@code null} if the context hasn't been initialized yet.
+     */
+    private void stopOffsetStore(final DebeziumSourceConnectorContext connectorContext) {
+        if (connectorContext == null || connectorContext.offsetStore() == null) {
+            LOGGER.debug("Offset store hasn't been initialized yet, closing of the offset store is skipped.");
+            return;
+        }
+
+        LOGGER.debug("Stopping offset backing store.");
+        try {
+            connectorContext.offsetStore().stop();
+        }
+        catch (Exception e) {
+            LOGGER.warn("Failed to stop offset backing store", e);
+        }
+    }
+
+    /**
      * Stops connector's tasks if they are already running and then stops connector itself.
      *
      * @param tasks {@link List<EngineSourceTask>} of source task should be stopped now.
@@ -627,6 +659,7 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
             stopPollingIfNeeded();
             stopSourceTasks(tasks);
         }
+        stopOffsetStore(connector.context());
         LOGGER.debug("Stopping the connector.");
         connector.connectConnector().stop();
         LOGGER.debug("Calling connector callback after connector stop");
@@ -961,12 +994,10 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
 
     /**
      * Determines the size of the thread pool which will be used for processing records. The value can be either number (provided as a {@code String} value) or
-     * a predefined placeholder from {@link ProcessingCores} enumeration. If the number of threads is provided as a number, it will be eventually limited to
-     * {@code AsyncEngineConfig.RECORD_PROCESSING_THREADS_CAP} to avoid possible overhead with too many context switches on a beefy machines with many cores, but
-     * running many other tasks.
+     * a predefined placeholder from {@link ProcessingCores} enumeration.
      *
      * @param recordProcessingThreads Requested number of processing threads as a {@code String}. It can be a number or predefined placeholder.
-     * @return Either requested number of threads or minimum of {@code AsyncEngineConfig.RECORD_PROCESSING_THREADS_CAP} and {@code AsyncEngineConfig.AVAILABLE_CORES}.
+     * @return Requested number of threads.
      */
     private int computeRecordThreads(final String recordProcessingThreads) {
         // First check if it's some our placeholder constant.
@@ -980,9 +1011,7 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
         if (cores <= 0) {
             throw new IllegalArgumentException("Number of cores cannot be negative or zero!");
         }
-
-        // Now we apply processor cap. As we provide all available cores as the default value, we eventually reduce the value now.
-        return Math.min(cores, AsyncEngineConfig.RECORD_PROCESSING_THREADS_CAP);
+        return cores;
     }
 
     /**

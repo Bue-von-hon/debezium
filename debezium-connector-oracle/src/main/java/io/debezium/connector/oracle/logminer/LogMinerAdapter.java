@@ -154,6 +154,11 @@ public class LogMinerAdapter extends AbstractStreamingAdapter<LogMinerStreamingC
     }
 
     @Override
+    public Scn getOffsetScn(OracleOffsetContext offsetContext) {
+        return offsetContext.getScn();
+    }
+
+    @Override
     public OracleOffsetContext copyOffset(OracleConnectorConfig connectorConfig, OracleOffsetContext offsetContext) {
         return new LogMinerOracleOffsetContextLoader(connectorConfig).load(offsetContext.getOffset());
     }
@@ -291,8 +296,8 @@ public class LogMinerAdapter extends AbstractStreamingAdapter<LogMinerStreamingC
     }
 
     private Scn getOldestScnAvailableInLogs(OracleConnectorConfig config, OracleConnection connection) throws SQLException {
-        final Duration archiveLogRetention = config.getLogMiningArchiveLogRetention();
-        final String archiveLogDestinationName = config.getLogMiningArchiveDestinationName();
+        final Duration archiveLogRetention = config.getArchiveLogRetention();
+        final String archiveLogDestinationName = config.getArchiveLogDestinationName();
         return connection.queryAndMap(SqlUtils.oldestFirstChangeQuery(archiveLogRetention, archiveLogDestinationName),
                 rs -> {
                     if (rs.next()) {
@@ -306,8 +311,8 @@ public class LogMinerAdapter extends AbstractStreamingAdapter<LogMinerStreamingC
     }
 
     private List<LogFile> getOrderedLogsFromScn(OracleConnectorConfig config, Scn sinceScn, OracleConnection connection) throws SQLException {
-        return LogMinerHelper.getLogFilesForOffsetScn(connection, sinceScn, config.getLogMiningArchiveLogRetention(),
-                config.isArchiveLogOnlyMode(), config.getLogMiningArchiveDestinationName())
+        final LogFileCollector collector = new LogFileCollector(config, connection);
+        return collector.getLogs(sinceScn)
                 .stream()
                 .sorted(Comparator.comparing(LogFile::getSequence))
                 .collect(Collectors.toList());
