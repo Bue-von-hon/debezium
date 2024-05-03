@@ -38,7 +38,7 @@ public class MySqlConnectorNoBlobIT extends AbstractAsyncEngineConnectorTest {
 
     private static final Path SCHEMA_HISTORY_PATH = Files.createTestingPath("file-schema-history-snapshot.txt").toAbsolutePath();
     protected static final UniqueDatabase DATABASE = new UniqueDatabase("logical_server_name",
-                                                                        "connector_noblob_mode_test") {
+            "connector_noblob_mode_test") {
         @Override
         protected JdbcConnection forTestDatabase(String databaseName, Map<String, Object> urlProperties) {
             return MySqlTestConnection.forTestDatabase(databaseName, urlProperties);
