@@ -382,7 +382,7 @@ public abstract class BinlogSnapshotChangeEventSource<P extends BinlogPartition,
         }
 
         // Get binlog_row_image mode
-        final String[] binlogRowImage = {null};
+        final String[] binlogRowImage = { null };
         connection.query("SHOW VARIABLES LIKE \'binlog_row_image\';", rs -> {
             if (rs.next()) {
                 binlogRowImage[0] = rs.getString("Value");
