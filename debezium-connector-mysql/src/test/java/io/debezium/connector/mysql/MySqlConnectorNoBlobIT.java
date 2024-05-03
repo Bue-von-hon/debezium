@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.kafka.connect.data.Field;
 import org.apache.kafka.connect.data.Schema;
@@ -21,10 +22,12 @@ import org.junit.Before;
 import org.junit.Test;
 
 import io.debezium.config.Configuration;
+import io.debezium.connector.binlog.util.UniqueDatabase;
 import io.debezium.data.KeyValueStore;
 import io.debezium.data.SchemaChangeHistory;
 import io.debezium.data.VerifyRecord;
 import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
+import io.debezium.jdbc.JdbcConnection;
 
 /**
  * Testing binlog_row_image=noblob mode in mysql
@@ -34,7 +37,13 @@ import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
 public class MySqlConnectorNoBlobIT extends AbstractAsyncEngineConnectorTest {
 
     private static final Path SCHEMA_HISTORY_PATH = Files.createTestingPath("file-schema-history-snapshot.txt").toAbsolutePath();
-    protected static final UniqueDatabase DATABASE = new UniqueDatabase("logical_server_name", "connector_noblob_mode_test")
+    protected static final UniqueDatabase DATABASE = new UniqueDatabase("logical_server_name",
+                                                                        "connector_noblob_mode_test") {
+        @Override
+        protected JdbcConnection forTestDatabase(String databaseName, Map<String, Object> urlProperties) {
+            return MySqlTestConnection.forTestDatabase(databaseName, urlProperties);
+        }
+    }
             .withDbHistoryPath(SCHEMA_HISTORY_PATH);
     protected Configuration config;
     private KeyValueStore store;
