@@ -396,8 +396,7 @@ public abstract class BinlogSnapshotChangeEventSource<P extends BinlogPartition,
                     // If binlog_row_image=noblob is set, it will exclude text/blob columns from the create query.
                     final String mode = binlogRowImage[0];
                     if ("NOBLOB".equals(mode)) {
-                        final String removedTextAndBlobColumns = removeTextAndBlobColumns(createStatment);
-                        addSchemaEvent(snapshotContext, tableId.catalog(), removedTextAndBlobColumns);
+                        addSchemaEvent(snapshotContext, tableId.catalog(), createStatment);
                     }
                     else {
                         addSchemaEvent(snapshotContext, tableId.catalog(), createStatment);
@@ -405,28 +404,6 @@ public abstract class BinlogSnapshotChangeEventSource<P extends BinlogPartition,
                 }
             });
         }
-    }
-
-    private static String removeTextAndBlobColumns(String createTableQuery) {
-        // Split queries into lines
-        final String[] lines = createTableQuery.split("\\n");
-        final StringBuilder modifiedQuery = new StringBuilder();
-
-        for (String line : lines) {
-            // Check each line to see if it contains TEXT or BLOB
-            if (!line.trim().toLowerCase().contains(" blob") && !line.trim().toLowerCase().contains(" text")) {
-                modifiedQuery.append(line).append('\n');
-            }
-        }
-
-        // The process of removing the last comma (only if present)
-        String resultQuery = modifiedQuery.toString().trim();
-        if (resultQuery.lastIndexOf(',') == resultQuery.length() - 1) {
-            resultQuery = resultQuery.substring(0, resultQuery.length() - 1) + '\n';
-        }
-
-        // Add the query closure back in
-        return resultQuery + ';';
     }
 
     private void createSchemaEventsForTables(RelationalSnapshotContext<P, O> snapshotContext,
