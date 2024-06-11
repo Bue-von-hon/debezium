@@ -69,18 +69,18 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
 
     private static final Logger LOGGER = LoggerFactory.getLogger(EventDispatcher.class);
 
-    private final TopicNamingStrategy<T> topicNamingStrategy;
+    protected final TopicNamingStrategy<T> topicNamingStrategy;
     private final DatabaseSchema<T> schema;
     private final HistorizedDatabaseSchema<T> historizedSchema;
-    private final ChangeEventQueue<DataChangeEvent> queue;
+    protected final ChangeEventQueue<DataChangeEvent> queue;
     private final DataCollectionFilter<T> filter;
-    private final ChangeEventCreator changeEventCreator;
+    protected final ChangeEventCreator changeEventCreator;
     private final Heartbeat heartbeat;
     private DataChangeEventListener<P> eventListener = DataChangeEventListener.NO_OP();
     private final boolean emitTombstonesOnDelete;
     private final InconsistentSchemaHandler<P, T> inconsistentSchemaHandler;
     private final TransactionMonitor transactionMonitor;
-    private final CommonConnectorConfig connectorConfig;
+    protected final CommonConnectorConfig connectorConfig;
     private final EnumSet<Operation> skippedOperations;
     private final boolean neverSkip;
 
@@ -538,6 +538,7 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
 
             doPostProcessing(key, value);
 
+            // TODO(hun): Marker for where to create a SourceRecord
             SourceRecord record = new SourceRecord(
                     partition.getSourcePartition(),
                     offsetContext.getOffset(),
@@ -545,6 +546,7 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
                     null,
                     dataCollectionSchema.keySchema(),
                     key,
+                    // TODO(hun): maybe it contains column
                     dataCollectionSchema.getEnvelopeSchema().schema(),
                     value,
                     null,
@@ -623,6 +625,7 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
 
             doPostProcessing(key, value);
 
+            // TODO(hun): Marker for where to create a SourceRecord
             SourceRecord record = new SourceRecord(
                     partition.getSourcePartition(),
                     offsetContext.getOffset(),
@@ -667,6 +670,7 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
                 final Integer partition = 0;
                 final Struct key = schemaChangeRecordKey(event);
                 final Struct value = schemaChangeRecordValue(event);
+                // TODO(hun): Marker for where to create a SourceRecord
                 final SourceRecord record = new SourceRecord(event.getPartition(), event.getOffset(), topicName, partition,
                         schemaChangeKeySchema, key, schemaChangeValueSchema, value);
                 enqueueSchemaChangeMessage(record);
