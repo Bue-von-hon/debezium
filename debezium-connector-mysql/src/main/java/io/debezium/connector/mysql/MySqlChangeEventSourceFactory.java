@@ -49,13 +49,13 @@ public class MySqlChangeEventSourceFactory implements ChangeEventSourceFactory<M
     private final SnapshotterService snapshotterService;
 
     public MySqlChangeEventSourceFactory(MySqlConnectorConfig configuration, MainConnectionProvidingConnectionFactory<BinlogConnectorConnection> connectionFactory,
-                                         ErrorHandler errorHandler, EventDispatcher<MySqlPartition, TableId> dispatcher, Clock clock, MySqlDatabaseSchema schema,
+                                         ErrorHandler errorHandler, MysqlEventDispatcher<MySqlPartition, TableId> dispatcher, Clock clock, MySqlDatabaseSchema schema,
                                          MySqlTaskContext taskContext, MySqlStreamingChangeEventSourceMetrics streamingMetrics,
                                          ChangeEventQueue<DataChangeEvent> queue, SnapshotterService snapshotterService) {
         this.configuration = configuration;
         this.connectionFactory = connectionFactory;
         this.errorHandler = errorHandler;
-        this.dispatcher = (MysqlEventDispatcher<MySqlPartition, TableId>) dispatcher;
+        this.dispatcher = dispatcher;
         this.clock = clock;
         this.taskContext = taskContext;
         this.streamingMetrics = streamingMetrics;

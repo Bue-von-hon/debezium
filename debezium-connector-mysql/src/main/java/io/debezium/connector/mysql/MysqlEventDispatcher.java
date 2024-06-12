@@ -1,7 +1,14 @@
+/*
+ * Copyright Debezium Authors.
+ *
+ * Licensed under the Apache Software License version 2.0, available at http://www.apache.org/licenses/LICENSE-2.0
+ */
 package io.debezium.connector.mysql;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.kafka.connect.data.Schema;
@@ -25,69 +32,28 @@ import io.debezium.pipeline.source.spi.EventMetadataProvider;
 import io.debezium.pipeline.spi.ChangeEventCreator;
 import io.debezium.pipeline.spi.OffsetContext;
 import io.debezium.pipeline.spi.Partition;
-import io.debezium.pipeline.txmetadata.TransactionMonitor;
+import io.debezium.relational.Column;
+import io.debezium.relational.Table;
+import io.debezium.relational.TableId;
 import io.debezium.schema.DataCollectionFilters.DataCollectionFilter;
 import io.debezium.schema.DataCollectionSchema;
-import io.debezium.schema.DatabaseSchema;
 import io.debezium.schema.SchemaNameAdjuster;
 import io.debezium.spi.schema.DataCollectionId;
 import io.debezium.spi.topic.TopicNamingStrategy;
 
 public class MysqlEventDispatcher<P extends Partition, T extends DataCollectionId> extends EventDispatcher {
     private static final Logger LOGGER = LoggerFactory.getLogger(MysqlEventDispatcher.class);
+    private final MySqlDatabaseSchema schema;
 
     public MysqlEventDispatcher(CommonConnectorConfig connectorConfig, TopicNamingStrategy topicNamingStrategy,
-                                DatabaseSchema schema, ChangeEventQueue queue, DataCollectionFilter filter,
-                                ChangeEventCreator changeEventCreator, EventMetadataProvider metadataProvider,
-                                SchemaNameAdjuster schemaNameAdjuster, SignalProcessor signalProcessor) {
-        super(connectorConfig, topicNamingStrategy, schema, queue, filter, changeEventCreator, metadataProvider,
-              schemaNameAdjuster, signalProcessor);
-    }
-
-    public MysqlEventDispatcher(CommonConnectorConfig connectorConfig, TopicNamingStrategy topicNamingStrategy,
-                                DatabaseSchema schema, ChangeEventQueue queue, DataCollectionFilter filter,
-                                ChangeEventCreator changeEventCreator, EventMetadataProvider metadataProvider,
-                                Heartbeat heartbeat, SchemaNameAdjuster schemaNameAdjuster,
-                                SignalProcessor signalProcessor) {
-        super(connectorConfig, topicNamingStrategy, schema, queue, filter, changeEventCreator, metadataProvider,
-              heartbeat, schemaNameAdjuster, signalProcessor);
-    }
-
-    public MysqlEventDispatcher(CommonConnectorConfig connectorConfig, TopicNamingStrategy topicNamingStrategy,
-                                DatabaseSchema schema, ChangeEventQueue queue, DataCollectionFilter filter,
-                                ChangeEventCreator changeEventCreator, EventMetadataProvider metadataProvider,
-                                Heartbeat heartbeat, SchemaNameAdjuster schemaNameAdjuster) {
-        super(connectorConfig, topicNamingStrategy, schema, queue, filter, changeEventCreator, metadataProvider,
-              heartbeat, schemaNameAdjuster);
-    }
-
-    public MysqlEventDispatcher(CommonConnectorConfig connectorConfig, TopicNamingStrategy topicNamingStrategy,
-                                DatabaseSchema schema, ChangeEventQueue queue, DataCollectionFilter filter,
-                                ChangeEventCreator changeEventCreator, EventMetadataProvider metadataProvider,
-                                SchemaNameAdjuster schemaNameAdjuster) {
-        super(connectorConfig, topicNamingStrategy, schema, queue, filter, changeEventCreator, metadataProvider,
-              schemaNameAdjuster);
-    }
-
-    public MysqlEventDispatcher(CommonConnectorConfig connectorConfig, TopicNamingStrategy topicNamingStrategy,
-                                DatabaseSchema schema, ChangeEventQueue queue, DataCollectionFilter filter,
+                                MySqlDatabaseSchema schema, ChangeEventQueue queue, DataCollectionFilter filter,
                                 ChangeEventCreator changeEventCreator,
                                 InconsistentSchemaHandler inconsistentSchemaHandler,
                                 EventMetadataProvider metadataProvider, Heartbeat heartbeat,
                                 SchemaNameAdjuster schemaNameAdjuster, SignalProcessor signalProcessor) {
         super(connectorConfig, topicNamingStrategy, schema, queue, filter, changeEventCreator,
-              inconsistentSchemaHandler, metadataProvider, heartbeat, schemaNameAdjuster, signalProcessor);
-    }
-
-    public MysqlEventDispatcher(CommonConnectorConfig connectorConfig, TopicNamingStrategy topicNamingStrategy,
-                                DatabaseSchema schema, ChangeEventQueue queue, DataCollectionFilter filter,
-                                ChangeEventCreator changeEventCreator,
-                                InconsistentSchemaHandler inconsistentSchemaHandler, Heartbeat heartbeat,
-                                SchemaNameAdjuster schemaNameAdjuster,
-                                TransactionMonitor transactionMonitor,
-                                SignalProcessor signalProcessor) {
-        super(connectorConfig, topicNamingStrategy, schema, queue, filter, changeEventCreator,
-              inconsistentSchemaHandler, heartbeat, schemaNameAdjuster, transactionMonitor, signalProcessor);
+                inconsistentSchemaHandler, metadataProvider, heartbeat, schemaNameAdjuster, signalProcessor);
+        this.schema = schema;
     }
 
     @Override
@@ -143,8 +109,7 @@ public class MysqlEventDispatcher<P extends Partition, T extends DataCollectionI
     }
 
     private static final class BufferedDataChangeEvent {
-        private static final BufferedDataChangeEvent
-                NULL = new BufferedDataChangeEvent();
+        private static final BufferedDataChangeEvent NULL = new BufferedDataChangeEvent();
 
         private DataChangeEvent dataChangeEvent;
         private OffsetContext offsetContext;
@@ -153,8 +118,7 @@ public class MysqlEventDispatcher<P extends Partition, T extends DataCollectionI
 
     private final class BufferingSnapshotChangeRecordReceiver implements SnapshotReceiver<P> {
 
-        private AtomicReference<BufferedDataChangeEvent>
-                bufferedEventRef = new AtomicReference<>(BufferedDataChangeEvent.NULL);
+        private AtomicReference<BufferedDataChangeEvent> bufferedEventRef = new AtomicReference<>(BufferedDataChangeEvent.NULL);
         private final boolean threaded;
 
         BufferingSnapshotChangeRecordReceiver(boolean threaded) {
@@ -176,6 +140,16 @@ public class MysqlEventDispatcher<P extends Partition, T extends DataCollectionI
             doPostProcessing(key, value);
 
             // TODO(hun): Marker for where to create a SourceRecord
+            Set<TableId> tableIds = schema.tableIds();
+            // TODO(hun): The following information can help determine the original type of a particular column.
+            Table table = schema.tableFor(tableIds.stream().findFirst().get());
+            List<Column> columns = table.columns();
+            for (Column column : columns) {
+                String typeName = column.typeName();
+                column.charsetName();
+            }
+            // TODO(hun): Need to check if noblob mode here.
+            // TODO(hun): If in noblob mode, only that data should be excluded.
             SourceRecord record = new SourceRecord(
                     partition.getSourcePartition(),
                     offsetContext.getOffset(),
