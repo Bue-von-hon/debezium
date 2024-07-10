@@ -215,8 +215,7 @@ public class MySqlConnectorTask extends BinlogSourceTask<MySqlPartition, MySqlOf
                                 MySqlFieldReaderResolver.resolve(connectorConfig)),
                         new BinlogHeartbeatErrorHandler()),
                 schemaNameAdjuster,
-                signalProcessor
-        );
+                signalProcessor);
         ChangeEventSourceCoordinator<MySqlPartition, MySqlOffsetContext> coordinator = new ChangeEventSourceCoordinator<>(
                 previousOffsets,
                 errorHandler,
