@@ -5,13 +5,16 @@
  */
 package io.debezium.connector.mysql;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.kafka.connect.data.Field;
 import org.apache.kafka.connect.data.Schema;
+import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.header.ConnectHeaders;
 import org.apache.kafka.connect.source.SourceRecord;
@@ -139,17 +142,10 @@ public class MysqlEventDispatcher<P extends Partition, T extends DataCollectionI
 
             doPostProcessing(key, value);
 
-            // TODO(hun): Marker for where to create a SourceRecord
-            Set<TableId> tableIds = schema.tableIds();
-            // TODO(hun): The following information can help determine the original type of a particular column.
-            Table table = schema.tableFor(tableIds.stream().findFirst().get());
-            List<Column> columns = table.columns();
-            for (Column column : columns) {
-                String typeName = column.typeName();
-                column.charsetName();
-            }
-            // TODO(hun): Need to check if noblob mode here.
-            // TODO(hun): If in noblob mode, only that data should be excluded.
+//            if (enabledNoblobMode) {
+//                removeTextBlobColumn(value, schema);
+//            }
+
             SourceRecord record = new SourceRecord(
                     partition.getSourcePartition(),
                     offsetContext.getOffset(),
@@ -200,6 +196,70 @@ public class MysqlEventDispatcher<P extends Partition, T extends DataCollectionI
                 offset.putAll(bufferedEvent.offsetContext.getOffset());
                 queue.enqueue(event);
             }
+        }
+    }
+
+    private void removeTextBlobColumn(Struct value, MySqlDatabaseSchema schema) {
+        final Set<TableId> tableIds = schema.tableIds();
+        final Table table = schema.tableFor(tableIds.stream().findFirst().get());
+        final List<Column> columns = table.columns();
+        final List<String> shouldSkip = new ArrayList<>();
+        for (Column column : columns) {
+            final String typeName = column.typeName();
+            final String name = column.name();
+            if ("BLOB".equalsIgnoreCase(typeName) || "TEXT".equalsIgnoreCase(typeName)) {
+                shouldSkip.add(name);
+            }
+        }
+
+        final Struct after = value.getStruct("after");
+        if (after != null) {
+            List<Field> fields = after.schema().fields();
+            List<Field> newFields = new ArrayList<>();
+            for (Field field : fields) {
+                String fieldName = field.name();
+                if (shouldSkip.contains(fieldName)) continue;
+                newFields.add(field);
+            }
+
+            SchemaBuilder schemaBuilder = SchemaBuilder.struct()
+                                                       .name(after.schema().name());
+            // Create a new one without the fields want to exclude
+            for (Field field : newFields) {
+                schemaBuilder.field(field.name(), field.schema());
+            }
+
+            // build new schema, which do not cotains blob/text
+            Schema newAfterSchema = schemaBuilder.build();
+            Struct struct = new Struct(newAfterSchema);
+
+            // update struct
+            value.put("after", struct);
+        }
+
+        final Struct before = value.getStruct("before");
+        if (before != null) {
+            List<Field> fields = before.schema().fields();
+            List<Field> newFields = new ArrayList<>();
+            for (Field field : fields) {
+                String fieldName = field.name();
+                if (shouldSkip.contains(fieldName)) continue;
+                newFields.add(field);
+            }
+
+            SchemaBuilder schemaBuilder = SchemaBuilder.struct()
+                                                       .name(before.schema().name());
+            // Create a new one without the fields want to exclude
+            for (Field field : newFields) {
+                schemaBuilder.field(field.name(), field.schema());
+            }
+
+            // build new schema, which do not cotains blob/text
+            Schema newAfterSchema = schemaBuilder.build();
+            Struct struct = new Struct(newAfterSchema);
+
+            // update struct
+            value.put("before", struct);
         }
     }
 }
