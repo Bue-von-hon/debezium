@@ -142,9 +142,9 @@ public class MysqlEventDispatcher<P extends Partition, T extends DataCollectionI
 
             doPostProcessing(key, value);
 
-//            if (enabledNoblobMode) {
-//                removeTextBlobColumn(value, schema);
-//            }
+            // if (enabledNoblobMode) {
+            // removeTextBlobColumn(value, schema);
+            // }
 
             SourceRecord record = new SourceRecord(
                     partition.getSourcePartition(),
@@ -218,12 +218,14 @@ public class MysqlEventDispatcher<P extends Partition, T extends DataCollectionI
             List<Field> newFields = new ArrayList<>();
             for (Field field : fields) {
                 String fieldName = field.name();
-                if (shouldSkip.contains(fieldName)) continue;
+                if (shouldSkip.contains(fieldName)) {
+                    continue;
+                }
                 newFields.add(field);
             }
 
             SchemaBuilder schemaBuilder = SchemaBuilder.struct()
-                                                       .name(after.schema().name());
+                    .name(after.schema().name());
             // Create a new one without the fields want to exclude
             for (Field field : newFields) {
                 schemaBuilder.field(field.name(), field.schema());
@@ -243,12 +245,14 @@ public class MysqlEventDispatcher<P extends Partition, T extends DataCollectionI
             List<Field> newFields = new ArrayList<>();
             for (Field field : fields) {
                 String fieldName = field.name();
-                if (shouldSkip.contains(fieldName)) continue;
+                if (shouldSkip.contains(fieldName)) {
+                    continue;
+                }
                 newFields.add(field);
             }
 
             SchemaBuilder schemaBuilder = SchemaBuilder.struct()
-                                                       .name(before.schema().name());
+                    .name(before.schema().name());
             // Create a new one without the fields want to exclude
             for (Field field : newFields) {
                 schemaBuilder.field(field.name(), field.schema());
