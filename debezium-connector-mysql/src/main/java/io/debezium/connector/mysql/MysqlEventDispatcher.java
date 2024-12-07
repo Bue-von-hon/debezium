@@ -66,7 +66,7 @@ public class MysqlEventDispatcher<P extends Partition, T extends DataCollectionI
 
     @Override
     public SnapshotReceiver<P> getSnapshotChangeEventReceiver() {
-        return new BufferingSnapshotChangeRecordReceiver(connectorConfig.getSnapshotMaxThreads() > 1);
+        return new BufferingSnapshotChangeRecordReceiver(this.getSnapshotMaxThreads() > 1);
     }
 
     private final class IncrementalSnapshotChangeRecordReceiver implements SnapshotReceiver<P> {
