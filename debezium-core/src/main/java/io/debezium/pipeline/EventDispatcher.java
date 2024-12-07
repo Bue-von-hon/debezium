@@ -567,7 +567,6 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
 
             doPostProcessing(key, value);
 
-            // TODO(hun): Marker for where to create a SourceRecord
             SourceRecord record = new SourceRecord(
                     partition.getSourcePartition(),
                     offsetContext.getOffset(),
@@ -575,7 +574,6 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
                     null,
                     dataCollectionSchema.keySchema(),
                     key,
-                    // TODO(hun): maybe it contains column
                     dataCollectionSchema.getEnvelopeSchema().schema(),
                     value,
                     null,
@@ -654,7 +652,6 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
 
             doPostProcessing(key, value);
 
-            // TODO(hun): Marker for where to create a SourceRecord
             SourceRecord record = new SourceRecord(
                     partition.getSourcePartition(),
                     offsetContext.getOffset(),
@@ -701,7 +698,6 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
                 final Integer partition = 0;
                 final Struct key = schemaChangeRecordKey(event);
                 final Struct value = schemaChangeRecordValue(event);
-                // TODO(hun): Marker for where to create a SourceRecord
                 final SourceRecord record = new SourceRecord(event.getPartition(), event.getOffset(), topicName, partition,
                         schemaChangeKeySchema, key, schemaChangeValueSchema, value);
                 enqueueSchemaChangeMessage(record);
