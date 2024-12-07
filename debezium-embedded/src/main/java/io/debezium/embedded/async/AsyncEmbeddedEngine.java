@@ -24,6 +24,8 @@ import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -63,6 +65,7 @@ import io.debezium.embedded.ConverterBuilder;
 import io.debezium.embedded.DebeziumEngineCommon;
 import io.debezium.embedded.EmbeddedEngineChangeEvent;
 import io.debezium.embedded.EmbeddedEngineConfig;
+import io.debezium.embedded.EmbeddedEngineSignaler;
 import io.debezium.embedded.EmbeddedWorkerConfig;
 import io.debezium.embedded.KafkaConnectUtil;
 import io.debezium.embedded.Transformations;
@@ -114,14 +117,15 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
     private final ExecutorService recordService;
     // A latch to make sure close() method finishes before we call completion callback, see also DBZ-7496.
     private final CountDownLatch shutDownLatch = new CountDownLatch(1);
+    private Signaler signaler;
 
     private AsyncEmbeddedEngine(Properties config,
                                 Consumer<R> consumer,
-                                DebeziumEngine.ChangeConsumer<R> handler,
+                                ChangeConsumer<R> handler,
                                 ClassLoader classLoader,
                                 io.debezium.util.Clock clock,
-                                DebeziumEngine.CompletionCallback completionCallback,
-                                DebeziumEngine.ConnectorCallback connectorCallback,
+                                CompletionCallback completionCallback,
+                                ConnectorCallback connectorCallback,
                                 OffsetCommitPolicy offsetCommitPolicy,
                                 HeaderConverter headerConverter,
                                 Function<SourceRecord, R> recordConverter) {
@@ -150,7 +154,7 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
         taskService = Executors.newFixedThreadPool(this.config.getInteger(ConnectorConfig.TASKS_MAX_CONFIG, () -> 1));
         final String processingThreads = this.config.getString(AsyncEmbeddedEngine.RECORD_PROCESSING_THREADS);
         if (processingThreads == null || processingThreads.isBlank()) {
-            recordService = Executors.newCachedThreadPool();
+            recordService = new ThreadPoolExecutor(0, AsyncEngineConfig.AVAILABLE_CORES, 60L, TimeUnit.SECONDS, new LinkedBlockingQueue());
         }
         else {
             recordService = Executors.newFixedThreadPool(computeRecordThreads(processingThreads));
@@ -187,6 +191,10 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
         Map<String, String> internalConverterConfig = Collections.singletonMap(JsonConverterConfig.SCHEMAS_ENABLE_CONFIG, "false");
         offsetKeyConverter.configure(internalConverterConfig, true);
         offsetValueConverter.configure(internalConverterConfig, false);
+    }
+
+    List<EngineSourceTask> tasks() {
+        return tasks;
     }
 
     @Override
@@ -274,6 +282,12 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
      * @param stateBeforeStop {@link State} of the engine when the shutdown was requested.
      */
     private void close(final State stateBeforeStop) {
+        try {
+            stopConnector(tasks, stateBeforeStop);
+        }
+        catch (Exception e) {
+            LOGGER.warn("Failed to stop connector properly: ", e);
+        }
         if (headerConverter != null) {
             try {
                 headerConverter.close();
@@ -282,7 +296,14 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
                 LOGGER.warn("Failed to close header converter: ", e);
             }
         }
-        stopConnector(tasks, stateBeforeStop);
+        if (transformations != null) {
+            try {
+                transformations.close();
+            }
+            catch (IOException e) {
+                LOGGER.warn("Failed to close transformations: ", e);
+            }
+        }
         shutDownLatch.countDown();
     }
 
@@ -315,7 +336,7 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
      */
     private void finishShutDown(Throwable exitError) {
         try {
-            shutDownLatch.await();
+            shutDownLatch.await(config.getLong(AsyncEngineConfig.TASK_MANAGEMENT_TIMEOUT_MS), TimeUnit.MILLISECONDS);
         }
         catch (InterruptedException e) {
             LOGGER.warn("Interrupted while waiting for shutdown to finish.");
@@ -443,7 +464,7 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
             throw error;
         }
         else {
-            LOGGER.info("All tasks have stated successfully.");
+            LOGGER.info("All tasks have started successfully.");
         }
     }
 
@@ -807,11 +828,24 @@ public final class AsyncEmbeddedEngine<R> implements DebeziumEngine<R>, AsyncEng
             throw e;
         }
         catch (ExecutionException | TimeoutException e) {
-            LOGGER.warn("Flush of the offsets failed, canceling the flush.");
+            LOGGER.warn("Flush of the offsets failed, canceling the flush.", e);
             offsetWriter.cancelFlush();
             return false;
         }
         return true;
+    }
+
+    @Override
+    public Signaler getSignaler() {
+        if (signaler == null) {
+            var channels = tasks().stream()
+                    .map(EngineSourceTask::signalChannelWriter)
+                    .flatMap(Optional::stream)
+                    .toList();
+
+            signaler = new EmbeddedEngineSignaler(channels);
+        }
+        return signaler;
     }
 
     /**

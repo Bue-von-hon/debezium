@@ -580,7 +580,8 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         BinlogPosition positionAfterUpdate = new BinlogPosition();
         try (BinlogTestConnection db = getTestDatabaseConnection(DATABASE.getDatabaseName());) {
             try (JdbcConnection connection = db.connect()) {
-                connection.query("SHOW MASTER STATUS", positionBeforeInserts::readFromDatabase);
+                var statusStmt = db.binaryLogStatusStatement();
+                connection.query(statusStmt, positionBeforeInserts::readFromDatabase);
                 connection.execute("INSERT INTO products(id,name,description,weight,volume,alias) VALUES "
                         + "(3001,'ashley','super robot',34.56,0.00,'ashbot'), "
                         + "(3002,'arthur','motorcycle',87.65,0.00,'arcycle'), "
@@ -590,7 +591,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
                         connection.print(rs);
                     }
                 });
-                connection.query("SHOW MASTER STATUS", positionAfterInserts::readFromDatabase);
+                connection.query(statusStmt, positionAfterInserts::readFromDatabase);
                 // Change something else that is unrelated ...
                 connection.execute("UPDATE products_on_hand SET quantity=40 WHERE product_id=109");
                 connection.query("SELECT * FROM products_on_hand", rs -> {
@@ -598,7 +599,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
                         connection.print(rs);
                     }
                 });
-                connection.query("SHOW MASTER STATUS", positionAfterUpdate::readFromDatabase);
+                connection.query(statusStmt, positionAfterUpdate::readFromDatabase);
             }
         }
 
@@ -1198,6 +1199,53 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
     }
 
     @Test
+    @FixFor("DBZ-7570 - workaround")
+    public void shouldConsumeEventsWithNonGracefulDisconnect() throws SQLException, InterruptedException {
+        Files.delete(SCHEMA_HISTORY_PATH);
+
+        // Use the DB configuration to define the connector's configuration ...
+        config = RO_DATABASE.defaultConfig()
+                .with(BinlogConnectorConfig.SNAPSHOT_MODE, SnapshotMode.NEVER)
+                .with(BinlogConnectorConfig.INCLUDE_SCHEMA_CHANGES, true)
+                .with(BinlogConnectorConfig.USE_NONGRACEFUL_DISCONNECT, true)
+                .build();
+
+        // Start the connector ...
+        start(getConnectorClass(), config);
+
+        // Consume the first records due to startup and initialization of the database ...
+        // Testing.Print.enable();
+        SourceRecords records = consumeRecordsByTopic(INITIAL_EVENT_COUNT); // 6 DDL changes
+        assertThat(recordsForTopicForRoProductsTable(records).size()).isEqualTo(9);
+        assertThat(records.recordsForTopic(RO_DATABASE.topicForTable("products_on_hand")).size()).isEqualTo(9);
+        assertThat(records.recordsForTopic(RO_DATABASE.topicForTable("customers")).size()).isEqualTo(4);
+        assertThat(records.recordsForTopic(RO_DATABASE.topicForTable("orders")).size()).isEqualTo(5);
+        assertThat(records.recordsForTopic(RO_DATABASE.topicForTable("Products")).size()).isEqualTo(9);
+        assertThat(records.topics().size()).isEqualTo(4 + 1);
+        assertThat(records.ddlRecordsForDatabase(RO_DATABASE.getDatabaseName()).size()).isEqualTo(6);
+
+        // check float value
+        Optional<SourceRecord> recordWithScientfic = records.recordsForTopic(RO_DATABASE.topicForTable("Products")).stream()
+                .filter(x -> "hammer2".equals(getAfter(x).get("name"))).findFirst();
+        assertThat(recordWithScientfic.isPresent());
+        assertThat(getAfter(recordWithScientfic.get()).get("weight")).isEqualTo(0.875f);
+
+        // Check that all records are valid, can be serialized and deserialized ...
+        records.forEach(this::validate);
+
+        // More records may have been written (if this method were run after the others), but we don't care ...
+        stopConnector();
+
+        records.recordsForTopic(RO_DATABASE.topicForTable("orders")).forEach(record -> {
+            print(record);
+        });
+
+        records.recordsForTopic(RO_DATABASE.topicForTable("customers")).forEach(record -> {
+            print(record);
+        });
+    }
+
+    @Test
     @FixFor("DBZ-1962")
     public void shouldConsumeEventsWithIncludedColumns() throws SQLException, InterruptedException {
         Files.delete(SCHEMA_HISTORY_PATH);
@@ -1749,7 +1797,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Should have been an insert with query parsed.
         validate(sourceRecord);
         assertInsert(sourceRecord, "id", 110);
-        assertSourceQuery(sourceRecord, insertSqlStatement);
+        assertSourceQuery(sourceRecord, getExpectedQuery(insertSqlStatement));
     }
 
     /**
@@ -1805,7 +1853,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Should have been an insert with query parsed.
         validate(sourceRecord1);
         assertInsert(sourceRecord1, "id", 110);
-        assertSourceQuery(sourceRecord1, insertSqlStatement1);
+        assertSourceQuery(sourceRecord1, getExpectedQuery(insertSqlStatement1));
 
         // Grab second event
         final SourceRecord sourceRecord2 = records.recordsForTopic(DATABASE.topicForTable(tableName)).get(1);
@@ -1813,7 +1861,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Should have been an insert with query parsed.
         validate(sourceRecord2);
         assertInsert(sourceRecord2, "id", 111);
-        assertSourceQuery(sourceRecord2, insertSqlStatement2);
+        assertSourceQuery(sourceRecord2, getExpectedQuery(insertSqlStatement2));
     }
 
     /**
@@ -1867,7 +1915,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Should have been an insert with query parsed.
         validate(sourceRecord1);
         assertInsert(sourceRecord1, "id", 110);
-        assertSourceQuery(sourceRecord1, insertSqlStatement);
+        assertSourceQuery(sourceRecord1, getExpectedQuery(insertSqlStatement));
 
         // Grab second event
         final SourceRecord sourceRecord2 = records.recordsForTopic(DATABASE.topicForTable(tableName)).get(1);
@@ -1875,7 +1923,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Should have been an insert with query parsed.
         validate(sourceRecord2);
         assertInsert(sourceRecord2, "id", 111);
-        assertSourceQuery(sourceRecord2, insertSqlStatement);
+        assertSourceQuery(sourceRecord2, getExpectedQuery(insertSqlStatement));
     }
 
     /**
@@ -1927,7 +1975,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Should have been a delete with query parsed.
         validate(sourceRecord);
         assertDelete(sourceRecord, "order_number", 10001);
-        assertSourceQuery(sourceRecord, deleteSqlStatement);
+        assertSourceQuery(sourceRecord, getExpectedQuery(deleteSqlStatement));
     }
 
     /**
@@ -1979,7 +2027,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Should have been a delete with query parsed.
         validate(sourceRecord1);
         assertDelete(sourceRecord1, "order_number", 10002);
-        assertSourceQuery(sourceRecord1, deleteSqlStatement);
+        assertSourceQuery(sourceRecord1, getExpectedQuery(deleteSqlStatement));
 
         // Validate second event.
         final SourceRecord sourceRecord2 = records.recordsForTopic(DATABASE.topicForTable(tableName)).get(1);
@@ -1987,7 +2035,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Should have been a delete with query parsed.
         validate(sourceRecord2);
         assertDelete(sourceRecord2, "order_number", 10004);
-        assertSourceQuery(sourceRecord2, deleteSqlStatement);
+        assertSourceQuery(sourceRecord2, getExpectedQuery(deleteSqlStatement));
     }
 
     /**
@@ -2039,7 +2087,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Should have been a delete with query parsed.
         validate(sourceRecord);
         assertUpdate(sourceRecord, "id", 109);
-        assertSourceQuery(sourceRecord, updateSqlStatement);
+        assertSourceQuery(sourceRecord, getExpectedQuery(updateSqlStatement));
     }
 
     /**
@@ -2091,7 +2139,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Should have been a delete with query parsed.
         validate(sourceRecord1);
         assertUpdate(sourceRecord1, "order_number", 10001);
-        assertSourceQuery(sourceRecord1, updateSqlStatement);
+        assertSourceQuery(sourceRecord1, getExpectedQuery(updateSqlStatement));
 
         // Validate second event
         final SourceRecord sourceRecord2 = records.recordsForTopic(DATABASE.topicForTable(tableName)).get(1);
@@ -2099,7 +2147,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Should have been a delete with query parsed.
         validate(sourceRecord2);
         assertUpdate(sourceRecord2, "order_number", 10004);
-        assertSourceQuery(sourceRecord2, updateSqlStatement);
+        assertSourceQuery(sourceRecord2, getExpectedQuery(updateSqlStatement));
     }
 
     /**
@@ -2108,7 +2156,7 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
      */
     @Test
     @FixFor("DBZ-1234")
-    public void shouldFailToValidateAdaptivePrecisionMode() throws InterruptedException {
+    public void shouldFailToValidateAdaptivePrecisionMode() {
         config = DATABASE.defaultConfig()
                 .with(BinlogConnectorConfig.INCLUDE_SCHEMA_CHANGES, true)
                 .with(BinlogConnectorConfig.SNAPSHOT_MODE, BinlogConnectorConfig.SnapshotMode.NEVER)
@@ -2650,6 +2698,50 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         assertThat(changeEvents.size()).isEqualTo(2);
 
         stopConnector();
+    }
+
+    @Test
+    @FixFor("DBZ-8134")
+    public void shouldAcceptLongAsServerId() throws InterruptedException {
+        Configuration config = DATABASE.defaultConfig()
+                .with(BinlogConnectorConfig.SERVER_ID, "202309181059")
+                .build();
+        start(getConnectorClass(), config);
+        waitForStreamingRunning(DATABASE.getServerName());
+        stopConnector();
+    }
+
+    @Test
+    @FixFor("DBZ-8290")
+    public void shouldUpdateTotalRecordsCounter() throws Exception {
+        final LogInterceptor logInterceptor = new LogInterceptor(BinlogStreamingChangeEventSource.class);
+        config = DATABASE.defaultConfig()
+                .with(BinlogConnectorConfig.INCLUDE_SCHEMA_CHANGES, false)
+                .with(BinlogConnectorConfig.SNAPSHOT_MODE, SnapshotMode.NO_DATA)
+                .build();
+
+        start(getConnectorClass(), config);
+        waitForSnapshotToBeCompleted(getConnectorName(), DATABASE.getServerName());
+
+        try (BinlogTestConnection db = getTestDatabaseConnection(DATABASE.getDatabaseName())) {
+            try (JdbcConnection connection = db.connect()) {
+                connection.execute("insert into orders values(1000, '2022-10-09', 1002, 90, 106)");
+                connection.commit();
+            }
+        }
+
+        SourceRecords records = consumeRecordsByTopic(1);
+        List<SourceRecord> changeEvents = records.recordsForTopic(DATABASE.topicForTable("orders"));
+        assertThat(changeEvents.size()).isEqualTo(1);
+
+        // Here we count all the records obtained from binlog, not only records pushed into the sink.
+        // Number of records may vary between MySQL and MariaDB and also between the runs on the same DB.
+        stopConnector(value -> assertThat(logInterceptor.messageMatches("^Stopped reading binlog after [5-9] events(.*)")).isTrue());
+    }
+
+    protected String getExpectedQuery(String statement) {
+
+        return statement;
     }
 
     private static class NoTombStonesHandler implements DebeziumEngine.ChangeConsumer<SourceRecord> {

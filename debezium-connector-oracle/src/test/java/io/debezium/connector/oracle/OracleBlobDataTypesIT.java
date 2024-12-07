@@ -40,7 +40,7 @@ import io.debezium.connector.oracle.util.TestHelper;
 import io.debezium.data.Envelope;
 import io.debezium.data.VerifyRecord;
 import io.debezium.doc.FixFor;
-import io.debezium.embedded.AbstractConnectorTest;
+import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
 import io.debezium.junit.logging.LogInterceptor;
 import io.debezium.util.IoUtil;
 import io.debezium.util.Testing;
@@ -53,7 +53,7 @@ import ch.qos.logback.classic.Level;
  * @author Chris Cranford
  */
 @SkipWhenLogMiningStrategyIs(value = SkipWhenLogMiningStrategyIs.Strategy.HYBRID, reason = "BLOB not supported by this mine mode")
-public class OracleBlobDataTypesIT extends AbstractConnectorTest {
+public class OracleBlobDataTypesIT extends AbstractAsyncEngineConnectorTest {
 
     private static final byte[] BIN_DATA = readBinaryData("data/test_lob_data.json");
 
@@ -2098,6 +2098,140 @@ public class OracleBlobDataTypesIT extends AbstractConnectorTest {
         }
         finally {
             TestHelper.dropTable(connection, "dbz5581");
+        }
+    }
+
+    @Test
+    @FixFor("DBZ-7790")
+    public void shouldNotMergeBlobDataWhenNoPrimaryKey() throws Exception {
+        TestHelper.dropTable(connection, "DBZ7790");
+        try {
+            connection.execute("CREATE TABLE DBZ7790(id numeric(9,0), DATA BLOB)");
+            TestHelper.streamTable(connection, "DBZ7790");
+
+            final Blob snapshotBlob1 = createBlob("aaa".getBytes(StandardCharsets.UTF_8));
+            connection.prepareQuery("INSERT INTO DBZ7790 values (1,?)", ps -> ps.setBlob(1, snapshotBlob1), null);
+            connection.commit();
+
+            final Blob snapshotBlob2 = createBlob("bbb".getBytes(StandardCharsets.UTF_8));
+            connection.prepareQuery("INSERT INTO DBZ7790 values (2,?)", ps -> ps.setBlob(1, snapshotBlob2), null);
+            connection.commit();
+
+            Configuration config = TestHelper.defaultConfig()
+                    .with(OracleConnectorConfig.TABLE_INCLUDE_LIST, "DEBEZIUM\\.DBZ7790")
+                    .with(OracleConnectorConfig.LOB_ENABLED, "true")
+                    .build();
+
+            start(OracleConnector.class, config);
+            assertConnectorIsRunning();
+            waitForStreamingRunning(TestHelper.CONNECTOR_NAME, TestHelper.SERVER_NAME);
+
+            // Get snapshot records
+            SourceRecords sourceRecords = consumeRecordsByTopic(2);
+            List<SourceRecord> tableRecords = sourceRecords.recordsForTopic(topicName("DBZ7790"));
+            assertThat(tableRecords).hasSize(2);
+
+            SourceRecord insert1 = tableRecords.get(0);
+            assertThat(getAfterField(insert1, "ID")).isEqualTo(1);
+            assertThat(getAfterField(insert1, "DATA")).isEqualTo(getByteBufferFromBlob(snapshotBlob1));
+
+            SourceRecord insert2 = tableRecords.get(1);
+            assertThat(getAfterField(insert2, "ID")).isEqualTo(2);
+            assertThat(getAfterField(insert2, "DATA")).isEqualTo(getByteBufferFromBlob(snapshotBlob2));
+
+            // Update - streaming
+            final Blob updateBlob1 = createBlob("ccc".getBytes(StandardCharsets.UTF_8));
+            connection.prepareQuery("UPDATE DBZ7790 set data = ? WHERE id = 1", ps -> ps.setBlob(1, updateBlob1), null);
+
+            final Blob updateBlob2 = createBlob("ddd".getBytes(StandardCharsets.UTF_8));
+            connection.prepareQuery("UPDATE DBZ7790 set data = ? WHERE id = 2", ps -> ps.setBlob(1, updateBlob2), null);
+            connection.commit();
+
+            sourceRecords = consumeRecordsByTopic(2);
+            tableRecords = sourceRecords.recordsForTopic(topicName("DBZ7790"));
+
+            // Streaming
+            assertThat(tableRecords).hasSize(2);
+
+            SourceRecord update1 = tableRecords.get(0);
+            assertThat(getAfterField(update1, "ID")).isEqualTo(1);
+            assertThat(getAfterField(update1, "DATA")).isEqualTo(getByteBufferFromBlob(updateBlob1));
+
+            SourceRecord update2 = tableRecords.get(1);
+            assertThat(getAfterField(update2, "ID")).isEqualTo(2);
+            assertThat(getAfterField(update2, "DATA")).isEqualTo(getByteBufferFromBlob(updateBlob2));
+
+            stopConnector();
+        }
+        finally {
+            TestHelper.dropTable(connection, "DBZ7790");
+        }
+    }
+
+    @Test
+    @FixFor("DBZ-7790")
+    public void shouldNotMergeLargeBlobDataWhenNoPrimaryKey() throws Exception {
+        TestHelper.dropTable(connection, "DBZ7790");
+        try {
+            connection.execute("CREATE TABLE DBZ7790(id numeric(9,0), DATA BLOB)");
+            TestHelper.streamTable(connection, "DBZ7790");
+
+            final Blob snapshotBlob1 = createBlob("aaa".getBytes(StandardCharsets.UTF_8));
+            connection.prepareQuery("INSERT INTO DBZ7790 values (1,?)", ps -> ps.setBlob(1, snapshotBlob1), null);
+            connection.commit();
+
+            final Blob snapshotBlob2 = createBlob("bbb".getBytes(StandardCharsets.UTF_8));
+            connection.prepareQuery("INSERT INTO DBZ7790 values (2,?)", ps -> ps.setBlob(1, snapshotBlob2), null);
+            connection.commit();
+
+            Configuration config = TestHelper.defaultConfig()
+                    .with(OracleConnectorConfig.TABLE_INCLUDE_LIST, "DEBEZIUM\\.DBZ7790")
+                    .with(OracleConnectorConfig.LOB_ENABLED, "true")
+                    .build();
+
+            start(OracleConnector.class, config);
+            assertConnectorIsRunning();
+            waitForStreamingRunning(TestHelper.CONNECTOR_NAME, TestHelper.SERVER_NAME);
+
+            // Get snapshot records
+            SourceRecords sourceRecords = consumeRecordsByTopic(2);
+            List<SourceRecord> tableRecords = sourceRecords.recordsForTopic(topicName("DBZ7790"));
+            assertThat(tableRecords).hasSize(2);
+
+            SourceRecord insert1 = tableRecords.get(0);
+            assertThat(getAfterField(insert1, "ID")).isEqualTo(1);
+            assertThat(getAfterField(insert1, "DATA")).isEqualTo(getByteBufferFromBlob(snapshotBlob1));
+
+            SourceRecord insert2 = tableRecords.get(1);
+            assertThat(getAfterField(insert2, "ID")).isEqualTo(2);
+            assertThat(getAfterField(insert2, "DATA")).isEqualTo(getByteBufferFromBlob(snapshotBlob2));
+
+            // Update - streaming
+            final Blob updateBlob1 = createBlob(part(BIN_DATA, 1, 5000));
+            connection.prepareQuery("UPDATE DBZ7790 set data = ? WHERE id = 1", ps -> ps.setBlob(1, updateBlob1), null);
+
+            final Blob updateBlob2 = createBlob(part(BIN_DATA, 250, 5500));
+            connection.prepareQuery("UPDATE DBZ7790 set data = ? WHERE id = 2", ps -> ps.setBlob(1, updateBlob2), null);
+            connection.commit();
+
+            sourceRecords = consumeRecordsByTopic(2);
+            tableRecords = sourceRecords.recordsForTopic(topicName("DBZ7790"));
+
+            // Streaming
+            assertThat(tableRecords).hasSize(2);
+
+            SourceRecord update1 = tableRecords.get(0);
+            assertThat(getAfterField(update1, "ID")).isEqualTo(1);
+            assertThat(getAfterField(update1, "DATA")).isEqualTo(getByteBufferFromBlob(updateBlob1));
+
+            SourceRecord update2 = tableRecords.get(1);
+            assertThat(getAfterField(update2, "ID")).isEqualTo(2);
+            assertThat(getAfterField(update2, "DATA")).isEqualTo(getByteBufferFromBlob(updateBlob2));
+
+            stopConnector();
+        }
+        finally {
+            TestHelper.dropTable(connection, "DBZ7790");
         }
     }
 

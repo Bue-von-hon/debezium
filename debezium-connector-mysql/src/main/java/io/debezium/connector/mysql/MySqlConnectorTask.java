@@ -171,7 +171,6 @@ public class MySqlConnectorTask extends BinlogSourceTask<MySqlPartition, MySqlOf
                 getAvailableSignalChannels(),
                 DocumentReader.defaultReader(),
                 previousOffsets);
-        resetOffset(connectorConfig, previousOffset, signalProcessor);
 
         final Configuration heartbeatConfig = config;
         final EventDispatcher<MySqlPartition, TableId> dispatcher = new EventDispatcher<>(
@@ -251,7 +250,8 @@ public class MySqlConnectorTask extends BinlogSourceTask<MySqlPartition, MySqlOf
                 configuration.getBigIntUnsignedHandlingMode().asBigIntUnsignedMode(),
                 configuration.binaryHandlingMode(),
                 configuration.isTimeAdjustedEnabled() ? MySqlValueConverters::adjustTemporal : x -> x,
-                configuration.getEventConvertingFailureHandlingMode());
+                configuration.getEventConvertingFailureHandlingMode(),
+                configuration.getServiceRegistry());
     }
 
     @Override
@@ -290,9 +290,4 @@ public class MySqlConnectorTask extends BinlogSourceTask<MySqlPartition, MySqlOf
         return MySqlConnectorConfig.ALL_FIELDS;
     }
 
-    @Override
-    @SuppressWarnings("unchecked")
-    protected Long getReadOnlyIncrementalSnapshotSignalOffset(MySqlOffsetContext previousOffset) {
-        return ((MySqlReadOnlyIncrementalSnapshotContext<TableId>) previousOffset.getIncrementalSnapshotContext()).getSignalOffset();
-    }
 }

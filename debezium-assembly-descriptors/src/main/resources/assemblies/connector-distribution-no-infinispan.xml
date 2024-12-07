@@ -27,14 +27,17 @@
 
               <!-- Exclude Infinispan and dependencies  -->
               <exclude>org.infinispan:infinispan-core:*</exclude>
-              <exclude>org.infinispan:infinispan-core-jakarta:*</exclude>
               <exclude>org.infinispan:infinispan-client-hotrod:*</exclude>
-              <exclude>org.infinispan:infinispan-client-hotrod-jakarta:*</exclude>
 
               <!-- Exclude Oracle OpenLogReplicator dependencies -->
               <exclude>io.vertx:vertx-core:*</exclude>
               <exclude>com.google.protobuf:protobuf-java:*</exclude>
               <exclude>com.google.protobuf:protobuf-java-util:*</exclude>
+
+              <!-- Exclude Oracle JDBC driver libraries -->
+              <exclude>com.oracle.database.jdbc:ojdbc8:*</exclude>
+              <exclude>com.oracle.database.jdbc:ojdbc11:*</exclude>
+              <exclude>com.oracle.database.nls:orai18n:*</exclude>
 
               <!-- Exclude dependencies with incorrect scope -->
               <exclude>org.checkerframework:checker-qual:*</exclude>

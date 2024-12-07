@@ -45,6 +45,8 @@ import io.debezium.jdbc.MainConnectionProvidingConnectionFactory;
 import io.debezium.pipeline.EventDispatcher;
 import io.debezium.pipeline.EventDispatcher.SnapshotReceiver;
 import io.debezium.pipeline.notification.NotificationService;
+import io.debezium.pipeline.signal.actions.snapshotting.AdditionalCondition;
+import io.debezium.pipeline.signal.actions.snapshotting.SnapshotConfiguration;
 import io.debezium.pipeline.source.AbstractSnapshotChangeEventSource;
 import io.debezium.pipeline.source.SnapshottingTask;
 import io.debezium.pipeline.source.spi.SnapshotChangeEventSource;
@@ -89,6 +91,7 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
     private final SnapshotProgressListener<P> snapshotProgressListener;
     protected final SnapshotterService snapshotterService;
     protected Queue<JdbcConnection> connectionPool;
+    private final TableId signalDataCollectionTableId;
 
     public RelationalSnapshotChangeEventSource(RelationalDatabaseConnectorConfig connectorConfig,
                                                MainConnectionProvidingConnectionFactory<? extends JdbcConnection> jdbcConnectionFactory,
@@ -104,6 +107,13 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
         this.clock = clock;
         this.snapshotProgressListener = snapshotProgressListener;
         this.snapshotterService = snapshotterService;
+
+        if (!Strings.isNullOrBlank(connectorConfig.getSignalingDataCollectionId())) {
+            this.signalDataCollectionTableId = TableId.parse(connectorConfig.getSignalingDataCollectionId());
+        }
+        else {
+            this.signalDataCollectionTableId = null;
+        }
     }
 
     @Override
@@ -118,14 +128,13 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
 
             Set<Pattern> dataCollectionsToBeSnapshotted = getDataCollectionPattern(snapshottingTask.getDataCollections());
 
-            Map<DataCollectionId, String> snapshotSelectOverridesByTable = snapshottingTask.getFilterQueries().entrySet().stream()
-                    .collect(Collectors.toMap(e -> TableId.parse(e.getKey()), Map.Entry::getValue));
+            Map<DataCollectionId, String> snapshotSelectOverridesByTable = snapshottingTask.getFilterQueries();
 
             preSnapshot();
 
             LOGGER.info("Snapshot step 1 - Preparing");
 
-            if (previousOffset != null && previousOffset.isSnapshotRunning()) {
+            if (previousOffset != null && previousOffset.isInitialSnapshotRunning()) {
                 LOGGER.info("Previous snapshot was cancelled before completion; a new snapshot will be taken.");
             }
 
@@ -167,7 +176,7 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
 
             if (snapshottingTask.snapshotData()) {
                 LOGGER.info("Snapshot step 7 - Snapshotting data");
-                createDataEvents(context, ctx, connectionPool, snapshotSelectOverridesByTable, snapshottingTask);
+                createDataEvents(context, ctx, connectionPool, snapshotSelectOverridesByTable);
             }
             else {
                 LOGGER.info("Snapshot step 7 - Skipping snapshotting of data");
@@ -229,9 +238,23 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
     }
 
     public Connection createSnapshotConnection() throws SQLException {
+
+        if (!jdbcConnection.isValid()) {
+            jdbcConnection.reconnect();
+        }
+
         Connection connection = jdbcConnection.connection();
         connection.setAutoCommit(false);
         return connection;
+    }
+
+    @Override
+    public SnapshottingTask getBlockingSnapshottingTask(P partition, O previousOffset, SnapshotConfiguration snapshotConfiguration) {
+
+        Map<DataCollectionId, String> filtersByTable = snapshotConfiguration.getAdditionalConditions().stream()
+                .collect(Collectors.toMap(k -> TableId.parse(k.getDataCollection().toString()), AdditionalCondition::getFilter));
+
+        return new SnapshottingTask(true, true, snapshotConfiguration.getDataCollections(), filtersByTable, true);
     }
 
     public SnapshottingTask getSnapshottingTask(P partition, O previousOffset) {
@@ -239,17 +262,16 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
         final Snapshotter snapshotter = snapshotterService.getSnapshotter();
 
         List<String> dataCollectionsToBeSnapshotted = connectorConfig.getDataCollectionsToBeSnapshotted();
-        Map<String, String> snapshotSelectOverridesByTable = connectorConfig.getSnapshotSelectOverridesByTable().entrySet().stream()
-                .collect(Collectors.toMap(e -> e.getKey().identifier(), Map.Entry::getValue));
+        Map<DataCollectionId, String> snapshotSelectOverridesByTable = connectorConfig.getSnapshotSelectOverridesByTable();
 
         boolean offsetExists = previousOffset != null;
         boolean snapshotInProgress = false;
 
         if (offsetExists) {
-            snapshotInProgress = previousOffset.isSnapshotRunning();
+            snapshotInProgress = previousOffset.isInitialSnapshotRunning();
         }
 
-        if (offsetExists && !previousOffset.isSnapshotRunning()) {
+        if (offsetExists && !previousOffset.isInitialSnapshotRunning()) {
             LOGGER.info("A previous offset indicating a completed snapshot has been found.");
         }
 
@@ -412,7 +434,13 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
                 lastSnapshotRecord(snapshotContext);
             }
 
-            SchemaChangeEvent event = getCreateTableEvent(snapshotContext, snapshotContext.tables.forTable(tableId));
+            final Table table = snapshotContext.tables.forTable(tableId);
+            if (table == null) {
+                throw new DebeziumException("Unable to find relational table model for '" + tableId +
+                        "', there may be an issue with your include/exclude list configuration.");
+            }
+
+            SchemaChangeEvent event = getCreateTableEvent(snapshotContext, table);
             if (HistorizedRelationalDatabaseSchema.class.isAssignableFrom(schema.getClass()) &&
                     ((HistorizedRelationalDatabaseSchema) schema).skipSchemaChangeEvent(event)) {
                 continue;
@@ -442,8 +470,7 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
 
     private void createDataEvents(ChangeEventSourceContext sourceContext,
                                   RelationalSnapshotContext<P, O> snapshotContext,
-                                  Queue<JdbcConnection> connectionPool, Map<DataCollectionId, String> snapshotSelectOverridesByTable,
-                                  SnapshottingTask snapshottingTask)
+                                  Queue<JdbcConnection> connectionPool, Map<DataCollectionId, String> snapshotSelectOverridesByTable)
             throws Exception {
         tryStartingSnapshot(snapshotContext);
 
@@ -524,8 +551,8 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
     protected abstract O copyOffset(RelationalSnapshotContext<P, O> snapshotContext);
 
     protected void tryStartingSnapshot(RelationalSnapshotContext<P, O> snapshotContext) {
-        if (!snapshotContext.offset.isSnapshotRunning()) {
-            snapshotContext.offset.preSnapshotStart();
+        if (!snapshotContext.offset.isInitialSnapshotRunning()) {
+            snapshotContext.offset.preSnapshotStart(snapshotContext.onDemand);
         }
     }
 
@@ -696,6 +723,11 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
      */
     private Optional<String> determineSnapshotSelect(RelationalSnapshotContext<P, O> snapshotContext, TableId tableId,
                                                      Map<DataCollectionId, String> snapshotSelectOverridesByTable) {
+        if (tableId.equals(signalDataCollectionTableId)) {
+            // Skip the signal data collection as data shouldn't be captured
+            return Optional.empty();
+        }
+
         String overriddenSelect = getSnapshotSelectOverridesByTable(tableId, snapshotSelectOverridesByTable);
         if (overriddenSelect != null) {
             return Optional.of(enhanceOverriddenSelect(snapshotContext, overriddenSelect, tableId));

@@ -46,6 +46,28 @@ public class ConnectorFactories {
 
     }
 
+    public ConnectorConfigBuilder mariadb(SqlDatabaseController controller, String connectorName) {
+        ConnectorConfigBuilder cb = new ConnectorConfigBuilder(connectorName);
+        String dbHost = controller.getDatabaseHostname();
+        Random random = new Random();
+        int dbPort = controller.getDatabasePort();
+
+        return cb
+                .put("topic.prefix", cb.getDbServerName())
+                .put("connector.class", "io.debezium.connector.mariadb.MariaDbConnector")
+                .put("task.max", 1)
+                .put("database.server.id", 5400 + random.nextInt(1000))
+                .put("database.ssl.mode", "disabled")
+                .put("database.hostname", dbHost)
+                .put("database.port", dbPort)
+                .put("database.user", ConfigProperties.DATABASE_MARIADB_DBZ_USERNAME)
+                .put("database.password", ConfigProperties.DATABASE_MARIADB_DBZ_PASSWORD)
+                .put("schema.history.internal.kafka.bootstrap.servers", kafka.getBootstrapAddress())
+                .put("schema.history.internal.kafka.topic", "schema-changes.inventory")
+                .addOperationRouterForTable("u", "customers");
+
+    }
+
     public ConnectorConfigBuilder postgresql(SqlDatabaseController controller, String connectorName) {
         ConnectorConfigBuilder cb = new ConnectorConfigBuilder(connectorName);
         String dbHost = controller.getDatabaseHostname();
@@ -104,10 +126,9 @@ public class ConnectorFactories {
                 .put("topic.prefix", connectorName)
                 .put("connector.class", "io.debezium.connector.mongodb.MongoDbConnector")
                 .put("task.max", 1)
-                .put("mongodb.user", ConfigProperties.DATABASE_MONGO_DBZ_USERNAME)
-                .put("mongodb.password", ConfigProperties.DATABASE_MONGO_DBZ_PASSWORD)
                 .put("mongodb.connection.string", controller.getPublicDatabaseUrl())
                 .put("mongodb.connection.mode", "sharded")
+                .addMongoDbzUser()
                 .addOperationRouterForTable("u", "customers");
         return cb;
     }
@@ -120,10 +141,9 @@ public class ConnectorFactories {
                 .put("topic.prefix", connectorName)
                 .put("connector.class", "io.debezium.connector.mongodb.MongoDbConnector")
                 .put("task.max", 4)
-                .put("mongodb.user", ConfigProperties.DATABASE_MONGO_DBZ_USERNAME)
-                .put("mongodb.password", ConfigProperties.DATABASE_MONGO_DBZ_PASSWORD)
                 .put("mongodb.connection.string", controller.getPublicDatabaseUrl())
                 .put("mongodb.connection.mode", "replica_set")
+                .addMongoDbzUser()
                 .addOperationRouterForTable("u", "customers");
         return cb;
     }
@@ -186,7 +206,7 @@ public class ConnectorFactories {
                 .put("insert.mode", "upsert")
                 .put("primary.key.mode", "kafka")
                 .put("schema.evolution", "basic")
-                .put("database.time_zone", "UTC")
+                .put("use.time.zone", "UTC")
                 .put("topics", "jdbc_sink_test");
     }
 }

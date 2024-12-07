@@ -15,6 +15,7 @@ import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 import org.apache.kafka.connect.data.Schema;
+import org.apache.kafka.connect.data.Schema.Type;
 import org.apache.kafka.connect.data.Struct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +68,8 @@ public class ReselectColumnsPostProcessor implements PostProcessor, BeanRegistry
     private ByteBuffer unavailableValuePlaceholderBytes;
     private Map<String, String> unavailableValuePlaceholderMap;
     private String unavailableValuePlaceholderJson;
+    private List<Integer> unavailablePlaceholderIntArray;
+    private List<Long> unavailablePlaceholderLongArray;
     private RelationalDatabaseSchema schema;
     private RelationalDatabaseConnectorConfig connectorConfig;
 
@@ -162,7 +165,7 @@ public class ReselectColumnsPostProcessor implements PostProcessor, BeanRegistry
 
         final Map<String, Object> selections;
         try {
-            selections = jdbcConnection.reselectColumns(tableId, requiredColumnSelections, keyColumns, keyValues, source);
+            selections = jdbcConnection.reselectColumns(table, requiredColumnSelections, keyColumns, keyValues, source);
             if (selections.isEmpty()) {
                 LOGGER.warn("Failed to find row in table {} with key {}.", tableId, key);
                 return;
@@ -196,6 +199,12 @@ public class ReselectColumnsPostProcessor implements PostProcessor, BeanRegistry
         this.unavailableValuePlaceholderBytes = ByteBuffer.wrap(connectorConfig.getUnavailableValuePlaceholder());
         this.unavailableValuePlaceholderMap = Map.of(this.unavailableValuePlaceholder, this.unavailableValuePlaceholder);
         this.unavailableValuePlaceholderJson = "{\"" + this.unavailableValuePlaceholder + "\":\"" + this.unavailableValuePlaceholder + "\"}";
+        unavailablePlaceholderIntArray = new ArrayList<>(unavailableValuePlaceholderBytes.limit());
+        unavailablePlaceholderLongArray = new ArrayList<>(unavailableValuePlaceholderBytes.limit());
+        for (byte b : unavailableValuePlaceholderBytes.array()) {
+            unavailablePlaceholderIntArray.add((int) b);
+            unavailablePlaceholderLongArray.add((long) b);
+        }
 
         this.valueConverterProvider = beanRegistry.lookupByName(StandardBeanNames.VALUE_CONVERTER, ValueConverterProvider.class);
         this.jdbcConnection = beanRegistry.lookupByName(StandardBeanNames.JDBC_CONNECTION, JdbcConnection.class);
@@ -235,6 +244,8 @@ public class ReselectColumnsPostProcessor implements PostProcessor, BeanRegistry
                         return true;
                     }
                 }
+                // Case for whole array value representing unavailable value
+                return isUnavailableArrayValueHolder(field.schema(), value);
             }
             else {
                 return isUnavailableValueHolder(field.schema(), value);
@@ -250,12 +261,28 @@ public class ReselectColumnsPostProcessor implements PostProcessor, BeanRegistry
             case MAP:
                 return unavailableValuePlaceholderMap.equals(value);
             case STRING:
-                if (Json.LOGICAL_NAME.equals(schema.name())) {
-                    return unavailableValuePlaceholderJson.equals(value);
-                }
-                return unavailableValuePlaceholder.equals(value);
+                // Both PostgreSQL HSTORE and JSON/JSONB have a schema name of "json".
+                // PostgreSQL HSTORE fields use a JSON-like unavailable value placeholder, e.g., {"key":"value"},
+                // while JSON/JSONB fields use a simple string placeholder.
+                // This condition is needed to handle both cases:
+                // - HSTORE unavailable value placeholders (as JSON objects)
+                // - JSON/JSONB unavailable value placeholders (as strings)
+                final boolean isJsonAndUnavailable = Json.LOGICAL_NAME.equals(schema.name()) && unavailableValuePlaceholderJson.equals(value);
+                return unavailableValuePlaceholder.equals(value) || isJsonAndUnavailable;
         }
         return false;
+    }
+
+    private boolean isUnavailableArrayValueHolder(Schema schema, Object value) {
+        assert schema.type() == Type.ARRAY;
+        switch (schema.valueSchema().type()) {
+            case INT32:
+                return unavailablePlaceholderIntArray.equals(value);
+            case INT64:
+                return unavailablePlaceholderLongArray.equals(value);
+            default:
+                return false;
+        }
     }
 
     private Object getConvertedValue(Column column, org.apache.kafka.connect.data.Field field, Object value) {

@@ -12,7 +12,7 @@ if (
 GIT_CREDENTIALS_ID = 'debezium-github'
 
 DEBEZIUM_DIR = 'debezium'
-HOME_DIR = '/home/centos'
+HOME_DIR = '/home/cloud-user'
 
 def additionalDirs = []
 node('Slave') {
@@ -48,7 +48,7 @@ node('Slave') {
             }
 
             dir(ORACLE_ARTIFACT_DIR) {
-                sh "mvn install:install-file -DgroupId=com.oracle.instantclient -DartifactId=ojdbc8 -Dversion=$ORACLE_ARTIFACT_VERSION -Dpackaging=jar -Dfile=ojdbc8.jar"
+                sh "mvn install:install-file -DgroupId=com.oracle.instantclient -DartifactId=ojdbc11 -Dversion=$ORACLE_ARTIFACT_VERSION -Dpackaging=jar -Dfile=ojdbc11.jar"
                 sh "mvn install:install-file -DgroupId=com.oracle.instantclient -DartifactId=xstreams -Dversion=$ORACLE_ARTIFACT_VERSION -Dpackaging=jar -Dfile=xstreams.jar"
             }
         }

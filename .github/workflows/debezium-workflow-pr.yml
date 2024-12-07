@@ -30,6 +30,7 @@ jobs:
       postgresql-changed: ${{ steps.changed-files-postgresql.outputs.any_changed }}
       oracle-changed: ${{ steps.changed-files-oracle.outputs.any_changed }}
       sqlserver-changed: ${{ steps.changed-files-sqlserver.outputs.any_changed }}
+      jdbc-changed: ${{ steps.changed-files-jdbc.outputs.any_changed }}
       outbox-changed: ${{ steps.changed-files-outbox.outputs.any_changed }}
       rest-extension-changed: ${{ steps.changed-files-rest-extension.outputs.any_changed }}
       schema-generator-changed: ${{ steps.changed-files-schema-generator.outputs.any_changed }}
@@ -37,6 +38,7 @@ jobs:
       debezium-testing-mongodb-changed: ${{ steps.changed-files-debezium-testing-mongodb.outputs.any_changed }}
       mysql-ddl-parser-changed: ${{ steps.changed-files-mysql-ddl-parser.outputs.any_changed }}
       oracle-ddl-parser-changed: ${{ steps.changed-files-oracle-ddl-parser.outputs.any_changed }}
+      mariadb-ddl-parser-changed: ${{ steps.changed-files-mariadb-ddl-parser.outputs.any_changed }}
       documentation-only-changed: ${{ steps.changed-files-documentation.outputs.only_changed }}
       storage-only-changed: ${{ steps.changed-files-storage.outputs.only_changed }}
     steps:
@@ -47,7 +49,7 @@ jobs:
 
       - name: Get modified files (Common)
         id: changed-files-common
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             support/checkstyle/**
@@ -69,21 +71,23 @@ jobs:
 
       - name: Get modified files (MongoDB)
         id: changed-files-mongodb
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
+            debezium-sink/**
             debezium-connector-mongodb/**
 
       - name: Get modified files (MySQL)
         id: changed-files-mysql
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-connector-mysql/**
+            debezium-connector-binlog/**
 
       - name: Get modified files (MariaDB)
         id: changed-files-mariadb
-        uses: tj-actions/changed-files@v43.0.0
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-connector-mariadb/**
@@ -91,28 +95,36 @@ jobs:
 
       - name: Get modified files (PostgreSQL)
         id: changed-files-postgresql
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-connector-postgres/**
 
       - name: Get modified files (Oracle)
         id: changed-files-oracle
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-connector-oracle/**
 
       - name: Get modified files (SQL Server)
         id: changed-files-sqlserver
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-connector-sqlserver/**
 
+      - name: Get modified files (JDBC)
+        id: changed-files-jdbc
+        uses: tj-actions/changed-files@v45.0.4
+        with:
+          files: |
+            debezium-sink/**
+            debezium-connector-jdbc/**
+
       - name: Get modified files (Quarkus Outbox)
         id: changed-files-outbox
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-quarkus-outbox/**
@@ -121,35 +133,35 @@ jobs:
 
       - name: Get modified files (REST Extension)
         id: changed-files-rest-extension
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-connect-rest-extension/**
 
       - name: Get modified files (Schema Generator)
         id: changed-files-schema-generator
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-schema-generator/**
 
       - name: Get modified files (Debezium Testing)
         id: changed-files-debezium-testing
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-testing/**
 
       - name: Get modified files (Debezium Testing MongoDB)
         id: changed-files-debezium-testing-mongodb
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-testing/**/MongoDb*.java
 
       - name: Get modified files (MySQL DDL parser)
         id: changed-files-mysql-ddl-parser
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-ddl-parser/src/main/antlr4/io/debezium/ddl/parser/mysql/**
@@ -158,7 +170,7 @@ jobs:
 
       - name: Get modified files (Oracle DDL parser)
         id: changed-files-oracle-ddl-parser
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-ddl-parser/src/main/antlr4/io/debezium/ddl/parser/oracle/**
@@ -168,14 +180,14 @@ jobs:
 
       - name: Get modified files (Documentation)
         id: changed-files-documentation
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             documentation/**
 
       - name: Get modified files (Storage)
         id: changed-files-storage
-        uses: tj-actions/changed-files@v44.0.1
+        uses: tj-actions/changed-files@v45.0.4
         with:
           files: |
             debezium-storage/**
@@ -197,6 +209,7 @@ jobs:
         with:
           repository: debezium/debezium-server
           path: server
+          ref: ${{ github.event.pull_request.base.ref }} 
 
       - uses: ./core/.github/actions/setup-java
 
@@ -207,7 +220,16 @@ jobs:
         with:
           path: ~/.m2/repository
           key: maven-debezium-test-build-${{ hashFiles('core/**/pom.xml') }}
-          restore-keys: maven-debezium-test-build-${{ hashFiles('core/**/pom.xml') }}
+          # Caches should be restored based on a logical order to minimize the build and test
+          # execution time. Here the logic is as follows:
+          #   1. Restore this PR's cache if the PR has previously been built
+          #   2. Restore the latest main cache if the core pom has not changed
+          #   3. Restore the latest main cache available
+          # This should minimize the download time required for updating dependencies
+          restore-keys: |
+            maven-debezium-test-build-${{ hashFiles('core/**/pom.xml') }}
+            maven-debezium-test-push-build-${{ hashFiles('core/**/pom.xml') }}
+            maven-debezium-test-push-build-
 
       # This step is responsible for pulling down artifacts
       # Unfortunately due to the nature of how some of the maven workflows work, the only reliable way
@@ -236,6 +258,13 @@ jobs:
 
       - name: Download dependencies (Debezium Server)
         if: steps.maven-cache-check.outputs.cache-hit != 'true'
+        # There are some corner cases where dependencies change and core no longer defines the
+        # dependency; however Debezium Server due to checking out main, may still refer to it.
+        # In this case, if the artifact fetch fails, we shouldn't fail the job.  Fixing the
+        # dependency in the Debezium Server repository with the same Jira issue tag as the
+        # main repository's PR will run the build based on the PR changes in main, and will
+        # allow validating the Debezium Server build separately.
+        continue-on-error: true
         run: >
           ./server/mvnw -B -ntp clean install -f server/pom.xml
           -Dformat.skip=true
@@ -262,7 +291,7 @@ jobs:
     strategy:
       # Runs each combination concurrently
       matrix:
-        version-mongo-server: [ "5.0", "7.0" ]
+        version-mongo-server: [ "5.0", "8.0" ]
       fail-fast: false
     name: "MongoDB ${{ matrix.version-mongo-server }}"
     needs: [ check_style, file_changes ]
@@ -283,7 +312,7 @@ jobs:
       # Runs each combination concurrently
       matrix:
         profile: [ "mysql-ci", "mysql-ci-gtids", "mysql-ci-percona", "mysql-ci-ssl" ]
-        version-mysql-server: [ "8.0", "8.2" ]
+        version-mysql-server: [ "8.0", "8.4", "9.1" ]
       fail-fast: false
     name: "MySQL ${{ matrix.version-mysql-server }} - ${{ matrix.profile }}"
     needs: [ check_style, file_changes ]
@@ -309,7 +338,7 @@ jobs:
     name: "MariaDB - ${{ matrix.profile }}"
     needs: [ check_style, file_changes ]
     runs-on: ubuntu-latest
-    if: ${{ needs.file_changes.outputs.common-changed == 'true' || needs.file_changes.outputs.mariadb-changed == 'true' || needs.file_changes.outputs.mysql-ddl-parser-changed == 'true' || needs.file_changes.outputs.schema-generator-changed == 'true' }}
+    if: ${{ needs.file_changes.outputs.common-changed == 'true' || needs.file_changes.outputs.mariadb-changed == 'true' || needs.file_changes.outputs.mariadb-ddl-parser-changed == 'true' || needs.file_changes.outputs.schema-generator-changed == 'true' }}
     steps:
       - name: Checkout Action
         uses: actions/checkout@v4
@@ -324,7 +353,7 @@ jobs:
     strategy:
       # Runs each combination concurrently
       matrix:
-        profile: [ "assembly", "assembly,postgres-16,pgoutput-decoder" ]
+        profile: [ "assembly,postgres-12", "assembly,postgres-17,pgoutput-decoder" ]
       fail-fast: false
     name: "PostgreSQL - ${{ matrix.profile }}"
     needs: [ check_style, file_changes ]
@@ -428,7 +457,7 @@ jobs:
     name: "Storage Module"
     needs: [ check_style, file_changes ]
     runs-on: ubuntu-latest
-    if: ${{ needs.file_changes.outputs.common-changed == 'true' || needs.file_changes.outputs.mysql-changed == 'true' || needs.file_changes.outputs.mysql-ddl-parser-changed == 'true' || needs.file_changes.outputs.storage-changed == 'true' }}
+    if: ${{ needs.file_changes.outputs.common-changed == 'true' || needs.file_changes.outputs.mysql-changed == 'true' || needs.file_changes.outputs.mysql-ddl-parser-changed == 'true' || needs.file_changes.outputs.storage-only-changed == 'true' }}
     steps:
       - name: Checkout Action
         uses: actions/checkout@v4
@@ -454,6 +483,7 @@ jobs:
         with:
           repository: debezium/debezium-connector-cassandra
           path: cassandra
+          ref: ${{ github.event.pull_request.base.ref }} 
 
       - uses: ./core/.github/actions/setup-java
 
@@ -484,6 +514,7 @@ jobs:
         with:
           repository: debezium/debezium-connector-db2
           path: db2
+          ref: ${{ github.event.pull_request.base.ref }} 
 
       - uses: ./core/.github/actions/setup-java
 
@@ -513,6 +544,7 @@ jobs:
         with:
           repository: debezium/debezium-connector-ibmi
           path: ibmi
+          ref: ${{ github.event.pull_request.base.ref }} 
 
       - uses: ./core/.github/actions/setup-java
 
@@ -526,9 +558,14 @@ jobs:
           path-core: core
           path-ibmi: ibmi
 
-  # Approx 45m
+  # Approx 45m each
   build_informix:
-    name: "Informix"
+    strategy:
+      # Runs each combination concurrently
+      matrix:
+        profile: [ "assembly,informix12", "assembly,informix14" ]
+      fail-fast: false
+    name: "Informix - ${{ matrix.profile }}"
     needs: [ check_style, file_changes ]
     runs-on: ubuntu-latest
     if: ${{ needs.file_changes.outputs.common-changed == 'true' }}
@@ -543,6 +580,7 @@ jobs:
         with:
           repository: debezium/debezium-connector-informix
           path: informix
+          ref: ${{ github.event.pull_request.base.ref }} 
 
       - uses: ./core/.github/actions/setup-java
 
@@ -555,6 +593,7 @@ jobs:
         with:
           path-core: core
           path-informix: informix
+          profile: ${{ matrix.profile }}
 
   # Approx 20m
   build_vitess:
@@ -573,6 +612,7 @@ jobs:
         with:
           repository: debezium/debezium-connector-vitess
           path: vitess
+          ref: ${{ github.event.pull_request.base.ref }} 
 
       - uses: ./core/.github/actions/setup-java
 
@@ -603,6 +643,7 @@ jobs:
         with:
           repository: debezium/debezium-connector-spanner
           path: spanner
+          ref: ${{ github.event.pull_request.base.ref }} 
 
       - uses: ./core/.github/actions/setup-java
 
@@ -621,30 +662,14 @@ jobs:
     name: "JDBC"
     needs: [ check_style, file_changes ]
     runs-on: ubuntu-latest
-    if: ${{ needs.file_changes.outputs.common-changed == 'true' }}
+    if: ${{ needs.file_changes.outputs.common-changed == 'true' || needs.file_changes.outputs.mysql-changed == 'true' || needs.file_changes.outputs.mysql-ddl-parser-changed == 'true' || needs.file_changes.outputs.mariadb-changed == 'true' || needs.file_changes.outputs.postgresql-changed == 'true' || needs.file_changes.outputs.sqlserver-changed == 'true' || needs.file_changes.outputs.sqlserver-changed == 'true' || needs.file_changes.outputs.db2-changed == 'true' || needs.file_changes.outputs.jdbc-changed == 'true' }}
     steps:
-      - name: Checkout Action (Debezium Core)
+      - name: Checkout Action
         uses: actions/checkout@v4
-        with:
-          path: core
 
-      - name: Checkout Action (JDBC)
-        uses: actions/checkout@v4
+      - uses: ./.github/actions/build-debezium-jdbc
         with:
-          repository: debezium/debezium-connector-jdbc
-          path: jdbc
-
-      - uses: ./core/.github/actions/setup-java
-
-      - uses: ./core/.github/actions/maven-cache
-        with:
-          # We specifically only use the hash of the pom files from the core repository
-          key: maven-debezium-test-build-${{ hashFiles('core/**/pom.xml') }}
-
-      - uses: ./core/.github/actions/build-debezium-jdbc
-        with:
-          path-core: core
-          path-jdbc: jdbc
+          maven-cache-key: maven-debezium-test-build-${{ hashFiles('**/pom.xml') }}
 
   build_debezium_server:
     name: "Debezium Server"
@@ -662,6 +687,7 @@ jobs:
         with:
           repository: debezium/debezium-server
           path: server
+          ref: ${{ github.event.pull_request.base.ref }} 
 
       - uses: ./core/.github/actions/setup-java
 

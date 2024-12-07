@@ -36,7 +36,7 @@ import io.debezium.connector.AbstractSourceInfo;
 import io.debezium.connector.SourceInfoStructMaker;
 import io.debezium.connector.mongodb.connection.DefaultMongoDbAuthProvider;
 import io.debezium.connector.mongodb.connection.MongoDbAuthProvider;
-import io.debezium.data.Envelope;
+import io.debezium.connector.mongodb.shared.SharedMongoDbConnectorConfig;
 import io.debezium.schema.DefaultTopicNamingStrategy;
 import io.debezium.spi.schema.DataCollectionId;
 import io.debezium.util.Strings;
@@ -44,7 +44,7 @@ import io.debezium.util.Strings;
 /**
  * The configuration properties.
  */
-public class MongoDbConnectorConfig extends CommonConnectorConfig {
+public class MongoDbConnectorConfig extends CommonConnectorConfig implements SharedMongoDbConnectorConfig {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MongoDbConnectorConfig.class);
 
@@ -332,7 +332,6 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
          * The MongoDB user used by debezium needs the following permissions/roles
          * <ul>
          *     <li>read role for any database
-         *     <li>read permissions to the config.shards collection (for sharded clusters with connection.mode=replica_set)</li>
          * </ul>
          */
         DEPLOYMENT("deployment"),
@@ -344,12 +343,22 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
          * <ul>
          *     <li>read role for database specified by {@link MongoDbConnectorConfig#CAPTURE_TARGET}</li>
          *     <li>write permissions to the signalling collection</li>
-         *     <li>read permissions to the config.shards collection (for sharded clusters with connection.mode=replica_set)</li>
          * </ul>
          *
          * Additionally, the signaling collection has to reside under {@link MongoDbConnectorConfig#CAPTURE_TARGET}
          */
-        DATABASE("database");
+        DATABASE("database"),
+
+        /**
+         * Capture changes from collection.
+         * <p>
+         * The MongoDB user used by debezium needs the following permissions/roles
+         * <ul>
+         *     <li>read role for collection specified by {@link MongoDbConnectorConfig#CAPTURE_TARGET}</li>
+         * </ul>
+         *
+         */
+        COLLECTION("collection");
 
         private final String value;
 
@@ -610,16 +619,6 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
             .withDefault(false)
             .withType(Type.BOOLEAN);
 
-    // MongoDb fields in Connection Group start from 1 (topic.prefix is 0)
-    public static final Field CONNECTION_STRING = Field.create("mongodb.connection.string")
-            .withDisplayName("Connection String")
-            .withType(Type.STRING)
-            .withGroup(Field.createGroupEntry(Field.Group.CONNECTION, 1))
-            .withWidth(Width.MEDIUM)
-            .withImportance(Importance.HIGH)
-            .withValidation(MongoDbConnectorConfig::validateConnectionString)
-            .withDescription("Database connection string.");
-
     public static final Field USER = Field.create("mongodb.user")
             .withDisplayName("User")
             .withType(Type.STRING)
@@ -673,7 +672,7 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
             .withWidth(Width.LONG)
             .withImportance(Importance.MEDIUM)
             .withDescription("The location of the key store file. "
-                    + "This is optional and can be used for two-way authentication between the client and the MySQL Server.");
+                    + "This is optional and can be used for two-way authentication between the client and the MongoDB Server.");
 
     public static final Field SSL_KEYSTORE_PASSWORD = Field.create("mongodb.ssl.keystore.password")
             .withDisplayName("SSL Keystore Password")
@@ -718,7 +717,7 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTION_ADVANCED_SSL, 6))
             .withWidth(Width.MEDIUM)
             .withImportance(Importance.MEDIUM)
-            .withDescription("The type of key store file. "
+            .withDescription("The type of trust store file. "
                     + "This is optional and only needed if 'mongodb.ssl.truststore' is configured.");
 
     public static final Field CONNECT_TIMEOUT_MS = Field.create("mongodb.connect.timeout.ms")
@@ -904,7 +903,8 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
             .withDescription("The scope of captured changes. "
                     + "Options include: "
                     + "'deployment' (the default) to capture changes from the entire MongoDB deployment; "
-                    + "'database' to capture changes from a specific MongoDB database");
+                    + "'database' to capture changes from a specific MongoDB database"
+                    + "'collection' to capture changes from a specific MongoDB collection");
 
     public static final Field CAPTURE_TARGET = Field.create("capture.target")
             .withDisplayName("Capture target")
@@ -913,7 +913,9 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 4))
             .withWidth(Width.SHORT)
             .withImportance(Importance.MEDIUM)
-            .withDescription("Name of captured database for " + CAPTURE_SCOPE.name() + "=" + CaptureScope.DATABASE.value);
+            .withDescription("The target to capture changes from. "
+                    + "For 'database' scope, this is the database name. "
+                    + "For 'collection' scope, this is the collection name as <databaseName>.<collectionName>.");
 
     protected static final Field TASK_ID = Field.create("mongodb.task.id")
             .withDescription("Internal use only")
@@ -1157,24 +1159,6 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
         return 0;
     }
 
-    private static int validateConnectionString(Configuration config, Field field, ValidationOutput problems) {
-        String connectionStringValue = config.getString(field);
-
-        if (connectionStringValue == null) {
-            problems.accept(field, null, "Missing connection string");
-            return 1;
-        }
-
-        try {
-            ConnectionString cs = new ConnectionString(connectionStringValue);
-        }
-        catch (Exception e) {
-            problems.accept(field, connectionStringValue, "Invalid connection string");
-            return 1;
-        }
-        return 0;
-    }
-
     private static int validateFieldExcludeList(Configuration config, Field field, ValidationOutput problems) {
         int problemCount = 0;
         String fieldExcludeList = config.getString(FIELD_EXCLUDE_LIST);
@@ -1402,22 +1386,18 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
         return getSourceInfoStructMaker(SOURCE_INFO_STRUCT_MAKER, Module.name(), Module.version(), this);
     }
 
-    public Optional<String> getSnapshotFilterQueryForCollection(CollectionId collectionId) {
-        return Optional.ofNullable(getSnapshotFilterQueryByCollection().get(collectionId.dbName() + "." + collectionId.name()));
-    }
-
-    public Map<String, String> getSnapshotFilterQueryByCollection() {
+    public Map<DataCollectionId, String> getSnapshotFilterQueryByCollection() {
         String collectionList = getConfig().getString(SNAPSHOT_FILTER_QUERY_BY_COLLECTION);
 
         if (collectionList == null) {
             return Collections.emptyMap();
         }
 
-        Map<String, String> snapshotFilterQueryByCollection = new HashMap<>();
+        Map<DataCollectionId, String> snapshotFilterQueryByCollection = new HashMap<>();
 
         for (String collection : collectionList.split(",")) {
             snapshotFilterQueryByCollection.put(
-                    collection,
+                    CollectionId.parse(collection),
                     getConfig().getString(
                             new StringBuilder().append(SNAPSHOT_FILTER_QUERY_BY_COLLECTION).append(".")
                                     .append(collection).toString()));
@@ -1446,21 +1426,16 @@ public class MongoDbConnectorConfig extends CommonConnectorConfig {
         return config.getInteger(SNAPSHOT_MAX_THREADS);
     }
 
-    private static ConnectionString resolveConnectionString(Configuration config) {
-        var connectionString = config.getString(MongoDbConnectorConfig.CONNECTION_STRING);
-        return new ConnectionString(connectionString);
-    }
-
     @Override
-    public Optional<String[]> parseSignallingMessage(Struct value) {
-        final String after = value.getString(Envelope.FieldName.AFTER);
-        if (after == null) {
-            LOGGER.warn("After part of signal '{}' is missing", value);
+    public Optional<String[]> parseSignallingMessage(Struct value, String fieldName) {
+        final String event = value.getString(fieldName);
+        if (event == null) {
+            LOGGER.warn("Field {} part of signal '{}' is missing", fieldName, value);
             return Optional.empty();
         }
-        final Document fields = Document.parse(after);
+        final Document fields = Document.parse(event);
         if (fields.size() != 3) {
-            LOGGER.warn("The signal event '{}' should have 3 fields but has {}", after, fields.size());
+            LOGGER.warn("The signal event '{}' should have 3 fields but has {}", event, fields.size());
             return Optional.empty();
         }
         final String[] result = new String[3];

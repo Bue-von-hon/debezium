@@ -33,6 +33,9 @@ jobs:
         with:
           repository: debezium/debezium-server
           path: server
+          # Always checkout based on pushed branch name in main repository
+          # This should always exist in the debezium-server repository.
+          ref: ${{ github.ref_name }}
 
       - uses: ./core/.github/actions/setup-java
 
@@ -100,7 +103,7 @@ jobs:
       # Run each MongoDB job sequentially
       max-parallel: 1
       matrix:
-        version-mongo-server: [ "5.0", "7.0" ]
+        version-mongo-server: [ "5.0", "8.0" ]
       fail-fast: false
     name: "MongoDB ${{ matrix.version-mongo-server }}"
     needs: [ check_style ]
@@ -121,7 +124,7 @@ jobs:
       max-parallel: 2
       matrix:
         profile: [ "mysql-ci", "mysql-ci-gtids", "mysql-ci-percona", "mysql-ci-ssl" ]
-        version-mysql-server: [ "8.0", "8.2" ]
+        version-mysql-server: [ "8.0", "8.4", "9.1" ]
       fail-fast: false
     name: "MySQL ${{ matrix.version-mysql-server }} - ${{ matrix.profile }}"
     needs: [ check_style ]
@@ -142,7 +145,7 @@ jobs:
       # Run each MariaDB job sequentially
       max-parallel: 1
       matrix:
-        profile: [ 'mysql-ci', 'mysql-ci-gtids' ]
+        profile: [ 'mariadb-ci', 'mariadb-ci-gtids' ]
       fail-fast: false
     name: "MariaDB - ${{ matrix.profile }}"
     needs: [ check_style ]
@@ -163,7 +166,7 @@ jobs:
       # Run each PostgreSQL job sequentially
       max-parallel: 1
       matrix:
-        profile: [ "assembly", "assembly,postgres-16,pgoutput-decoder" ]
+        profile: [ "assembly,postgres-12", "assembly,postgres-17,pgoutput-decoder" ]
       fail-fast: false
     name: "PostgreSQL - ${{ matrix.profile }}"
     needs: [ check_style ]
@@ -453,29 +456,12 @@ jobs:
     needs: [ check_style, build_spanner ]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Action (Debezium Core)
+      - name: Checkout Action
         uses: actions/checkout@v4
-        with:
-          path: core
 
-      - name: Checkout Action (JDBC)
-        uses: actions/checkout@v4
+      - uses: ./.github/actions/build-debezium-jdbc
         with:
-          repository: debezium/debezium-connector-jdbc
-          path: jdbc
-          ref: ${{ github.ref_name }}
-
-      - uses: ./core/.github/actions/setup-java
-
-      - uses: ./core/.github/actions/maven-cache
-        with:
-          # We specifically only use the hash of the pom files from the core repository
-          key: maven-debezium-test-push-build-${{ hashFiles('core/**/pom.xml') }}
-
-      - uses: ./core/.github/actions/build-debezium-jdbc
-        with:
-          path-core: core
-          path-jdbc: jdbc
+          maven-cache-key: maven-debezium-test-push-build-${{ hashFiles('**/pom.xml') }}
 
   # Approx 26m
   build_debezium_server:

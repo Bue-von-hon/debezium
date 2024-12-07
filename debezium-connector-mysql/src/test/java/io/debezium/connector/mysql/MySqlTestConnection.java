@@ -25,6 +25,7 @@ public class MySqlTestConnection extends BinlogTestConnection {
         MYSQL_5_6,
         MYSQL_5_7,
         MYSQL_8,
+        MYSQL_9
     }
 
     MySqlVersion mySqlVersion;
@@ -41,12 +42,27 @@ public class MySqlTestConnection extends BinlogTestConnection {
 
     /**
      * Obtain a connection instance to the named test replica database.
-     * if no replica, obtain same connection with {@link #forTestDatabase(String) forTestDatabase}
+     * if no replica, obtain same connection with {@link #forTestDatabase(String, int) forTestDatabase}
      * @param databaseName the name of the test replica database
      * @return the MySQLConnection instance; never null
      */
     public static MySqlTestConnection forTestReplicaDatabase(String databaseName) {
         return new MySqlTestConnection(getReplicaJdbcConfig(databaseName).build());
+    }
+
+    /**
+     * Obtain a connection instance to the named test database.
+     *
+     *
+     * @param databaseName the name of the test database
+     * @param queryTimeout the seconds to wait for query execution
+     * @return the MySQLConnection instance; never null
+     */
+
+    public static MySqlTestConnection forTestDatabase(String databaseName, int queryTimeout) {
+        return new MySqlTestConnection(getDefaultJdbcConfig(databaseName)
+                .withQueryTimeoutMs(queryTimeout)
+                .build());
     }
 
     /**
@@ -101,7 +117,9 @@ public class MySqlTestConnection extends BinlogTestConnection {
 
     @Override
     public String currentDateTimeDefaultOptional(String isoString) {
-        return !MySqlVersion.MYSQL_8.equals(getMySqlVersion()) ? isoString : null;
+        return !MySqlVersion.MYSQL_8.equals(getMySqlVersion()) && !MySqlVersion.MYSQL_9.equals(getMySqlVersion())
+                ? isoString
+                : null;
     }
 
     @Override
@@ -126,7 +144,7 @@ public class MySqlTestConnection extends BinlogTestConnection {
 
     @Override
     public boolean isCurrentDateTimeDefaultGenerated() {
-        return MySqlVersion.MYSQL_8.equals(getMySqlVersion());
+        return MySqlVersion.MYSQL_8.equals(getMySqlVersion()) || MySqlVersion.MYSQL_9.equals(getMySqlVersion());
     }
 
     public MySqlVersion getMySqlVersion() {
@@ -134,7 +152,10 @@ public class MySqlTestConnection extends BinlogTestConnection {
             final String versionString = getMySqlVersionString();
 
             // Fallback to MySQL
-            if (versionString.startsWith("8.")) {
+            if (versionString.startsWith("9.")) {
+                mySqlVersion = MySqlVersion.MYSQL_9;
+            }
+            else if (versionString.startsWith("8.")) {
                 mySqlVersion = MySqlVersion.MYSQL_8;
             }
             else if (versionString.startsWith("5.5")) {

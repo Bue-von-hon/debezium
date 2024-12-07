@@ -19,15 +19,14 @@ import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.ParseTree;
 
-import com.mysql.cj.CharsetMapping;
-
+import io.debezium.annotation.VisibleForTesting;
 import io.debezium.antlr.AntlrDdlParser;
 import io.debezium.antlr.AntlrDdlParserListener;
 import io.debezium.antlr.DataTypeResolver;
 import io.debezium.antlr.DataTypeResolver.DataTypeEntry;
+import io.debezium.connector.binlog.charset.BinlogCharsetRegistry;
 import io.debezium.connector.binlog.jdbc.BinlogSystemVariables;
 import io.debezium.connector.mysql.antlr.listener.MySqlAntlrDdlParserListener;
-import io.debezium.connector.mysql.jdbc.MySqlValueConverters;
 import io.debezium.ddl.parser.mysql.generated.MySqlLexer;
 import io.debezium.ddl.parser.mysql.generated.MySqlParser;
 import io.debezium.ddl.parser.mysql.generated.MySqlParser.CharsetNameContext;
@@ -49,27 +48,25 @@ import io.debezium.relational.Tables.TableFilter;
 public class MySqlAntlrDdlParser extends AntlrDdlParser<MySqlLexer, MySqlParser> {
 
     private final ConcurrentMap<String, String> charsetNameForDatabase = new ConcurrentHashMap<>();
-    private final MySqlValueConverters converters;
     private final TableFilter tableFilter;
+    private final BinlogCharsetRegistry charsetRegistry;
 
+    @VisibleForTesting
     public MySqlAntlrDdlParser() {
-        this(null, TableFilter.includeAll());
+        this(TableFilter.includeAll());
     }
 
-    public MySqlAntlrDdlParser(MySqlValueConverters converters) {
-        this(converters, TableFilter.includeAll());
-    }
-
-    public MySqlAntlrDdlParser(MySqlValueConverters converters, TableFilter tableFilter) {
-        this(true, false, false, converters, tableFilter);
+    @VisibleForTesting
+    public MySqlAntlrDdlParser(TableFilter tableFilter) {
+        this(true, false, false, tableFilter, null);
     }
 
     public MySqlAntlrDdlParser(boolean throwErrorsFromTreeWalk, boolean includeViews, boolean includeComments,
-                               MySqlValueConverters converters, TableFilter tableFilter) {
+                               TableFilter tableFilter, BinlogCharsetRegistry charsetRegistry) {
         super(throwErrorsFromTreeWalk, includeViews, includeComments);
         systemVariables = new BinlogSystemVariables();
-        this.converters = converters;
         this.tableFilter = tableFilter;
+        this.charsetRegistry = charsetRegistry;
     }
 
     @Override
@@ -185,6 +182,8 @@ public class MySqlAntlrDdlParser extends AntlrDdlParser<MySqlLexer, MySqlParser>
                         .setDefaultLengthScaleDimension(10, 0),
                 new DataTypeEntry(Types.BIT, MySqlParser.BIT)
                         .setDefaultLengthDimension(1),
+                new DataTypeEntry(Types.OTHER, MySqlParser.VECTOR)
+                        .setDefaultLengthDimension(2048),
                 new DataTypeEntry(Types.TIME, MySqlParser.TIME),
                 new DataTypeEntry(Types.TIMESTAMP_WITH_TIMEZONE, MySqlParser.TIMESTAMP),
                 new DataTypeEntry(Types.TIMESTAMP, MySqlParser.DATETIME),
@@ -434,10 +433,6 @@ public class MySqlAntlrDdlParser extends AntlrDdlParser<MySqlLexer, MySqlParser>
         return option.replaceAll(",", "\\\\,").replaceAll("\\\\'", "'").replace("''", "'");
     }
 
-    public MySqlValueConverters getConverters() {
-        return converters;
-    }
-
     public TableFilter getTableFilter() {
         return tableFilter;
     }
@@ -456,10 +451,9 @@ public class MySqlAntlrDdlParser extends AntlrDdlParser<MySqlLexer, MySqlParser>
         }
         else if (collationNode != null && collationNode.getText() != null) {
             final String collationName = withoutQuotes(collationNode.getText()).toLowerCase();
-            for (int index = 0; index < CharsetMapping.MAP_SIZE; index++) {
-                if (collationName.equals(
-                        CharsetMapping.getStaticCollationNameForCollationIndex(index))) {
-                    charsetName = CharsetMapping.getStaticMysqlCharsetNameForCollationIndex(index);
+            for (int index = 0; index < charsetRegistry.getCharsetMapSize(); index++) {
+                if (collationName.equals(charsetRegistry.getCollationNameForCollationIndex(index))) {
+                    charsetName = charsetRegistry.getCharsetNameForCollationIndex(index);
                     break;
                 }
             }

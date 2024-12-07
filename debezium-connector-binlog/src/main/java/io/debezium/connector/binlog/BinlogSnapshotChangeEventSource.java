@@ -48,6 +48,7 @@ import io.debezium.pipeline.EventDispatcher;
 import io.debezium.pipeline.notification.NotificationService;
 import io.debezium.pipeline.source.SnapshottingTask;
 import io.debezium.pipeline.source.spi.SnapshotChangeEventSource;
+import io.debezium.relational.RelationalDatabaseConnectorConfig.SnapshotTablesRowCountOrder;
 import io.debezium.relational.RelationalSnapshotChangeEventSource;
 import io.debezium.relational.RelationalTableFilters;
 import io.debezium.relational.Table;
@@ -67,6 +68,7 @@ public abstract class BinlogSnapshotChangeEventSource<P extends BinlogPartition,
         extends RelationalSnapshotChangeEventSource<P, O> {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BinlogSnapshotChangeEventSource.class);
+    private static final Logger ROW_ESTIMATE_LOGGER = LoggerFactory.getLogger(BinlogSnapshotChangeEventSource.class.getName() + ".RowEstimate");
 
     private final BinlogConnectorConfig connectorConfig;
     private final BinlogConnectorConnection connection;
@@ -564,9 +566,12 @@ public abstract class BinlogSnapshotChangeEventSource<P extends BinlogPartition,
         if (getSnapshotSelectOverridesByTable(tableId, connectorConfig.getSnapshotSelectOverridesByTable()) != null) {
             return super.rowCountForTable(tableId);
         }
-        OptionalLong rowCount = connection.getEstimatedTableSize(tableId);
-        LOGGER.info("Estimated row count for table {} is {}", tableId, rowCount);
-        return rowCount;
+        if (ROW_ESTIMATE_LOGGER.isInfoEnabled() || connectorConfig.snapshotOrderByRowCount() != SnapshotTablesRowCountOrder.DISABLED) {
+            OptionalLong rowCount = connection.getEstimatedTableSize(tableId);
+            LOGGER.info("Estimated row count for table {} is {}", tableId, rowCount);
+            return rowCount;
+        }
+        return OptionalLong.empty();
     }
 
     @Override
@@ -665,5 +670,13 @@ public abstract class BinlogSnapshotChangeEventSource<P extends BinlogPartition,
     protected void preSnapshot() throws InterruptedException {
         preSnapshotAction.run();
         super.preSnapshot();
+    }
+
+    @Override
+    protected void aborted(SnapshotContext<P, O> snapshotContext) throws InterruptedException {
+
+        lastEventProcessor.accept(Function.identity());
+
+        super.aborted(snapshotContext);
     }
 }

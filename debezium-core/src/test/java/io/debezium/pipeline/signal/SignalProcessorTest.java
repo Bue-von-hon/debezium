@@ -265,12 +265,12 @@ public class SignalProcessorTest {
         }
 
         @Override
-        public boolean isSnapshotRunning() {
+        public boolean isInitialSnapshotRunning() {
             return false;
         }
 
         @Override
-        public void preSnapshotStart() {
+        public void preSnapshotStart(boolean onDemand) {
 
         }
 

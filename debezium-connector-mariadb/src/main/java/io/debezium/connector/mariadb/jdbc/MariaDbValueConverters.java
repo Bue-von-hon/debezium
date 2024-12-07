@@ -15,6 +15,7 @@ import io.debezium.connector.binlog.jdbc.BinlogValueConverters;
 import io.debezium.connector.mariadb.antlr.MariaDbAntlrDdlParser;
 import io.debezium.jdbc.TemporalPrecisionMode;
 import io.debezium.relational.Column;
+import io.debezium.service.spi.ServiceRegistry;
 
 /**
  * MariaDB specific converter handlers for JDBC values.<p></p>
@@ -43,23 +44,20 @@ public class MariaDbValueConverters extends BinlogValueConverters {
      * @param binaryHandlingMode how binary columns should be treated
      * @param adjuster a temporal adjuster to make a database specific time before conversion
      * @param eventConvertingFailureHandlingMode how to handle conversion failures
+     * @param serviceRegistry the service registry, should not be {@code null}
      */
     public MariaDbValueConverters(DecimalMode decimalMode,
                                   TemporalPrecisionMode temporalPrecisionMode,
                                   BigIntUnsignedMode bigIntUnsignedMode,
                                   BinaryHandlingMode binaryHandlingMode,
                                   TemporalAdjuster adjuster,
-                                  EventConvertingFailureHandlingMode eventConvertingFailureHandlingMode) {
-        super(decimalMode, temporalPrecisionMode, bigIntUnsignedMode, binaryHandlingMode, adjuster, eventConvertingFailureHandlingMode);
+                                  EventConvertingFailureHandlingMode eventConvertingFailureHandlingMode,
+                                  ServiceRegistry serviceRegistry) {
+        super(decimalMode, temporalPrecisionMode, bigIntUnsignedMode, binaryHandlingMode, adjuster, eventConvertingFailureHandlingMode, serviceRegistry);
     }
 
     @Override
     protected List<String> extractEnumAndSetOptions(Column column) {
         return MariaDbAntlrDdlParser.extractEnumAndSetOptions(column.enumValues());
-    }
-
-    @Override
-    protected String getJavaEncodingForCharSet(String charSetName) {
-        return MariaDbConnection.getJavaEncodingForCharSet(charSetName);
     }
 }

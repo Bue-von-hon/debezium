@@ -63,8 +63,7 @@ public class ApicurioRegistryTest {
 
     private static final ApicurioRegistryContainer apicurioContainer = new ApicurioRegistryContainer().withNetwork(network);
 
-    private static final KafkaContainer kafkaContainer = new KafkaContainer()
-            .withNetwork(network);
+    private static final KafkaContainer kafkaContainer = DebeziumKafkaContainer.defaultKRaftContainer(network);
 
     public static final PostgreSQLContainer<?> postgresContainer = new PostgreSQLContainer<>(ImageNames.POSTGRES_DOCKER_IMAGE_NAME)
             .withNetwork(network)
@@ -147,7 +146,8 @@ public class ApicurioRegistryTest {
 
             debeziumContainer.registerConnector("my-connector-avro", getConfiguration(
                     2, "io.apicurio.registry.utils.converter.AvroConverter",
-                    "schema.name.adjustment.mode", "avro"));
+                    "schema.name.adjustment.mode", "avro",
+                    "key.converter.apicurio.registry.headers.enabled", "false"));
 
             consumer.subscribe(Arrays.asList("dbserver2.todo.todo"));
 

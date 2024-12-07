@@ -78,10 +78,14 @@ import io.debezium.util.VariableLatch;
  * the running thread (e.g., as is the case with {@link ExecutorService#shutdownNow()}).
  *
  * @author Randall Hauch
+ *
+ * @deprecated Use {@link io.debezium.embedded.async.AsyncEmbeddedEngine} instead.
  */
+@Deprecated
 @ThreadSafe
 public final class EmbeddedEngine implements DebeziumEngine<SourceRecord>, EmbeddedEngineConfig {
 
+    @Deprecated
     public static final class EngineBuilder implements Builder<SourceRecord> {
         private Configuration config;
         private DebeziumEngine.ChangeConsumer<SourceRecord> handler;
@@ -672,7 +676,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord>, Embed
                 startedSuccessfully = true;
             }
             catch (Exception ex) {
-                if (totalRetries >= maxRetries) {
+                if (maxRetries != EmbeddedEngineConfig.DEFAULT_ERROR_MAX_RETRIES && totalRetries >= maxRetries) {
                     LOGGER.error("Can't start the connector, max retries to connect exceeded; stopping connector...", ex);
                     return ex;
                 }

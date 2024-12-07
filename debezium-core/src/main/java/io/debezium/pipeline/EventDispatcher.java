@@ -5,6 +5,8 @@
  */
 package io.debezium.pipeline;
 
+import static io.debezium.config.CommonConnectorConfig.WatermarkStrategy.INSERT_DELETE;
+
 import java.time.Instant;
 import java.util.Collection;
 import java.util.EnumSet;
@@ -69,18 +71,18 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
 
     private static final Logger LOGGER = LoggerFactory.getLogger(EventDispatcher.class);
 
-    protected final TopicNamingStrategy<T> topicNamingStrategy;
+    protected final TransactionMonitor transactionMonitor;
+    private final TopicNamingStrategy<T> topicNamingStrategy;
     private final DatabaseSchema<T> schema;
     private final HistorizedDatabaseSchema<T> historizedSchema;
-    protected final ChangeEventQueue<DataChangeEvent> queue;
+    private final ChangeEventQueue<DataChangeEvent> queue;
     private final DataCollectionFilter<T> filter;
-    protected final ChangeEventCreator changeEventCreator;
+    private final ChangeEventCreator changeEventCreator;
     private final Heartbeat heartbeat;
     private DataChangeEventListener<P> eventListener = DataChangeEventListener.NO_OP();
     private final boolean emitTombstonesOnDelete;
     private final InconsistentSchemaHandler<P, T> inconsistentSchemaHandler;
-    private final TransactionMonitor transactionMonitor;
-    protected final CommonConnectorConfig connectorConfig;
+    private final CommonConnectorConfig connectorConfig;
     private final EnumSet<Operation> skippedOperations;
     private final boolean neverSkip;
 
@@ -204,32 +206,37 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
     public void dispatchSnapshotEvent(P partition, T dataCollectionId, ChangeRecordEmitter<P> changeRecordEmitter,
                                       SnapshotReceiver<P> receiver)
             throws InterruptedException {
-        // TODO Handle Heartbeat
 
-        DataCollectionSchema dataCollectionSchema = schema.schemaFor(dataCollectionId);
+        try {
+            // TODO Handle Heartbeat
+            DataCollectionSchema dataCollectionSchema = schema.schemaFor(dataCollectionId);
 
-        // TODO handle as per inconsistent schema info option
-        if (dataCollectionSchema == null) {
-            errorOnMissingSchema(partition, dataCollectionId, changeRecordEmitter);
-        }
-
-        changeRecordEmitter.emitChangeRecords(dataCollectionSchema, new Receiver<P>() {
-
-            @Override
-            public void changeRecord(P partition,
-                                     DataCollectionSchema schema,
-                                     Operation operation,
-                                     Object key, Struct value,
-                                     OffsetContext offset,
-                                     ConnectHeaders headers)
-                    throws InterruptedException {
-
-                LOGGER.trace("Received change record {} for {} operation on key {} with context {}", value, operation, key, offset);
-
-                eventListener.onEvent(partition, dataCollectionSchema.id(), offset, key, value, operation);
-                receiver.changeRecord(partition, dataCollectionSchema, operation, key, value, offset, headers);
+            // TODO handle as per inconsistent schema info option
+            if (dataCollectionSchema == null) {
+                errorOnMissingSchema(partition, dataCollectionId, changeRecordEmitter);
             }
-        });
+
+            changeRecordEmitter.emitChangeRecords(dataCollectionSchema, new Receiver<P>() {
+
+                @Override
+                public void changeRecord(P partition,
+                                         DataCollectionSchema schema,
+                                         Operation operation,
+                                         Object key, Struct value,
+                                         OffsetContext offset,
+                                         ConnectHeaders headers)
+                        throws InterruptedException {
+
+                    LOGGER.trace("Received change record {} for {} operation on key {} with context {}", value, operation, key, offset);
+
+                    eventListener.onEvent(partition, dataCollectionSchema.id(), offset, key, value, operation);
+                    receiver.changeRecord(partition, dataCollectionSchema, operation, key, value, offset, headers);
+                }
+            });
+        }
+        catch (Exception e) {
+            handleEventProcessingFailure(e, changeRecordEmitter.getOffset());
+        }
     }
 
     public SnapshotReceiver<P> getSnapshotChangeEventReceiver() {
@@ -304,7 +311,8 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
                     }
 
                     private boolean isASignalEventToProcess(T dataCollectionId, Operation operation) {
-                        return operation == Operation.CREATE &&
+                        return (operation == Operation.CREATE ||
+                                (operation == Operation.DELETE && connectorConfig.getIncrementalSnapshotWatermarkingStrategy() == INSERT_DELETE)) &&
                                 connectorConfig.isSignalDataCollection(dataCollectionId);
                     }
                 });
@@ -319,21 +327,28 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
             return handled;
         }
         catch (Exception e) {
-            switch (connectorConfig.getEventProcessingFailureHandlingMode()) {
-                case FAIL:
-                    throw new ConnectException("Error while processing event at offset " + changeRecordEmitter.getOffset().getOffset(), e);
-                case WARN:
-                    LOGGER.warn(
-                            "Error while processing event at offset {}",
-                            changeRecordEmitter.getOffset().getOffset(), e);
-                    break;
-                case SKIP:
-                    LOGGER.debug(
-                            "Error while processing event at offset {}",
-                            changeRecordEmitter.getOffset().getOffset(), e);
-                    break;
-            }
+            handleEventProcessingFailure(e, changeRecordEmitter.getOffset());
             return false;
+        }
+    }
+
+    private void handleEventProcessingFailure(Exception e, OffsetContext offsetContext) {
+        switch (connectorConfig.getEventProcessingFailureHandlingMode()) {
+            case FAIL:
+                throw new ConnectException("Error while processing event at offset " + offsetContext.getOffset(), e);
+            case WARN:
+                LOGGER.warn(
+                        "Error while processing event at offset {}", offsetContext.getOffset(), e);
+                break;
+            case SKIP:
+                LOGGER.debug(
+                        "Error while processing event at offset {}", offsetContext.getOffset(), e);
+                break;
+            default:
+                LOGGER.debug(
+                        "Error while processing event with EventProcessingFailureHandlingMode not supported: {}",
+                        connectorConfig.getEventConvertingFailureHandlingMode(), e);
+                break;
         }
     }
 
@@ -424,6 +439,20 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
                 partition.getSourcePartition(),
                 offset.getOffset(),
                 this::enqueueHeartbeat);
+    }
+
+    // Use this method when you want to dispatch the heartbeat also to incremental snapshot.
+    // Currently, this is used by PostgreSQL for read-only incremental snapshot but doesn't suites well for
+    // MySQL since the dispatchHeartbeatEvent is called at every received message and not when there is no message from the DB log.
+    public void dispatchHeartbeatEventAlsoToIncrementalSnapshot(P partition, OffsetContext offset) throws InterruptedException {
+        heartbeat.heartbeat(
+                partition.getSourcePartition(),
+                offset.getOffset(),
+                this::enqueueHeartbeat);
+
+        if (incrementalSnapshotChangeEventSource != null) {
+            incrementalSnapshotChangeEventSource.processHeartbeat(partition, offset);
+        }
     }
 
     public boolean heartbeatsEnabled() {
@@ -663,7 +692,9 @@ public class EventDispatcher<P extends Partition, T extends DataCollectionId> im
 
         @Override
         public void schemaChangeEvent(SchemaChangeEvent event) throws InterruptedException {
-            historizedSchema.applySchemaChange(event);
+            if (historizedSchema != null) {
+                historizedSchema.applySchemaChange(event);
+            }
 
             if (connectorConfig.isSchemaChangesHistoryEnabled()) {
                 final String topicName = topicNamingStrategy.schemaChangeTopic();

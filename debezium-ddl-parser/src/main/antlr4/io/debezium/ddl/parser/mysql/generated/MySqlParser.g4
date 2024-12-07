@@ -238,7 +238,7 @@ createTablespaceNdb
 
 createTrigger
     : CREATE orReplace? ownerStatement?                         // orReplace is MariaDB-specific only
-      TRIGGER thisTrigger=fullId
+      TRIGGER ifNotExists? thisTrigger=fullId
       triggerTime=(BEFORE | AFTER)
       triggerEvent=(INSERT | UPDATE | DELETE)
       ON tableName FOR EACH ROW
@@ -513,6 +513,7 @@ tableOption
           | REDUNDANT | COMPACT | ID
         )                                                                           #tableOptionRowFormat
     | START TRANSACTION                                                             #tableOptionStartTransaction
+    | SECONDARY_ENGINE '='? (ID | STRING_LITERAL)                                   #tableOptionSecondaryEngine // HeatWave-specific only
     | SECONDARY_ENGINE_ATTRIBUTE '='? STRING_LITERAL                                #tableOptionSecondaryEngineAttribute
     | STATS_AUTO_RECALC '='? extBoolValue=(DEFAULT | '0' | '1')                     #tableOptionRecalculation
     | STATS_PERSISTENT '='? extBoolValue=(DEFAULT | '0' | '1')                      #tableOptionPersistent
@@ -1719,15 +1720,16 @@ renameUser
     ;
 
 revokeStatement
-    : REVOKE privelegeClause (',' privelegeClause)*
+    : REVOKE ifExists? (privelegeClause | uid) (',' privelegeClause | uid)*
       ON
       privilegeObject=(TABLE | FUNCTION | PROCEDURE)?
       privilegeLevel
-      FROM userName (',' userName)*                                 #detailRevoke
-    | REVOKE ALL PRIVILEGES? ',' GRANT OPTION
-      FROM userName (',' userName)*                                 #shortRevoke
-    | REVOKE (userName | uid) (',' (userName | uid))*
-      FROM (userName | uid) (',' (userName | uid))*                 #roleRevoke
+      FROM userName (',' userName)* (IGNORE UNKNOWN USER)?          #detailRevoke
+    | REVOKE ifExists? ALL PRIVILEGES? ',' GRANT OPTION
+      FROM userName (',' userName)*  (IGNORE UNKNOWN USER)?         #shortRevoke
+    | REVOKE ifExists? (userName | uid) (',' (userName | uid))*
+      FROM (userName | uid) (',' (userName | uid))*
+      (IGNORE UNKNOWN USER)?                                        #roleRevoke
     ;
 
 revokeProxy
@@ -2349,7 +2351,7 @@ dataType
       )                                                             #simpleDataType
     | typeName=(
         BIT | TIME | TIMESTAMP | DATETIME | BINARY
-        | VARBINARY | BLOB | YEAR
+        | VARBINARY | BLOB | YEAR | VECTOR
       )
       lengthOneDimension?                                           #dimensionDataType
     | typeName=(ENUM | SET)
@@ -2856,7 +2858,7 @@ keywordsCanBeId
     | THAN | TP_CONNECTION_ADMIN | TRADITIONAL | TRANSACTION | TRANSACTIONAL | TRIGGERS | TRUNCATE | UNBOUNDED | UNDEFINED | UNDOFILE
     | UNDO_BUFFER_SIZE | UNINSTALL | UNKNOWN | UNTIL | UPGRADE | USA | USER | USE_FRM | USER_RESOURCES | VALIDATION
     | VALUE | VAR_POP | VAR_SAMP | VARIABLES | VARIANCE | VERSIONING | VERSION_TOKEN_ADMIN | VIEW | VIRTUAL | WAIT | WARNINGS
-    | WITHOUT | WORK | WRAPPER | X509 | XA | XA_RECOVER_ADMIN | XML
+    | WITHOUT | WORK | WRAPPER | X509 | XA | XA_RECOVER_ADMIN | XML | YES
     // MariaDB-specific only
     | BINLOG_MONITOR | BINLOG_REPLAY | CURRENT_ROLE | CYCLE | ENCRYPTED | ENCRYPTION_KEY_ID | FEDERATED_ADMIN
     | INCREMENT | LASTVAL | LOCKED | MAXVALUE | MINVALUE | NEXTVAL | NOCACHE | NOCYCLE | NOMAXVALUE | NOMINVALUE
@@ -2878,7 +2880,7 @@ functionNameBase
     | CREATE_DH_PARAMETERS | CREATE_DIGEST | CROSSES | CUME_DIST | DATABASE | DATE
     | DATEDIFF | DATE_FORMAT | DAY | DAYNAME | DAYOFMONTH
     | DAYOFWEEK | DAYOFYEAR | DECODE | DEGREES | DENSE_RANK | DES_DECRYPT
-    | DES_ENCRYPT | DIMENSION | DISJOINT | ELT | ENCODE
+    | DES_ENCRYPT | DIMENSION | DISJOINT | DISTANCE | ELT | ENCODE
     | ENCRYPT | ENDPOINT | ENVELOPE | EQUALS | EXP | EXPORT_SET
     | EXTERIORRING | EXTRACTVALUE | FIELD | FIND_IN_SET | FIRST_VALUE | FLOOR
     | FORMAT | FOUND_ROWS | FROM_BASE64 | FROM_DAYS
@@ -2934,13 +2936,13 @@ functionNameBase
     | ST_POLYFROMTEXT | ST_POLYFROMWKB | ST_POLYGONFROMTEXT
     | ST_POLYGONFROMWKB | ST_SRID | ST_STARTPOINT
     | ST_SYMDIFFERENCE | ST_TOUCHES | ST_UNION | ST_WITHIN
-    | ST_X | ST_Y | SUBDATE | SUBSTRING_INDEX | SUBTIME
+    | ST_X | ST_Y | STRING_TO_VECTOR | SUBDATE | SUBSTRING_INDEX | SUBTIME
     | SYSTEM_USER | TAN | TIME | TIMEDIFF | TIMESTAMP
     | TIMESTAMPADD | TIMESTAMPDIFF | TIME_FORMAT | TIME_TO_SEC
     | TOUCHES | TO_BASE64 | TO_DAYS | TO_SECONDS | UCASE
     | UNCOMPRESS | UNCOMPRESSED_LENGTH | UNHEX | UNIX_TIMESTAMP
     | UPDATEXML | UPPER | UUID | UUID_SHORT
-    | VALIDATE_PASSWORD_STRENGTH | VERSION | VISIBLE
+    | VALIDATE_PASSWORD_STRENGTH | VERSION | VECTOR_DIM | VECTOR_TO_STRING | VISIBLE
     | WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS | WEEK | WEEKDAY
     | WEEKOFYEAR | WEIGHT_STRING | WITHIN | YEAR | YEARWEEK
     | Y_FUNCTION | X_FUNCTION

@@ -36,6 +36,7 @@ import io.debezium.connector.SourceInfoStructMaker;
 import io.debezium.connector.oracle.logminer.LogMinerStreamingChangeEventSourceMetrics;
 import io.debezium.connector.oracle.logminer.logwriter.LogWriterFlushStrategy;
 import io.debezium.connector.oracle.logminer.processor.LogMinerEventProcessor;
+import io.debezium.connector.oracle.logminer.processor.ehcache.EhcacheLogMinerEventProcessor;
 import io.debezium.connector.oracle.logminer.processor.infinispan.EmbeddedInfinispanLogMinerEventProcessor;
 import io.debezium.connector.oracle.logminer.processor.infinispan.RemoteInfinispanLogMinerEventProcessor;
 import io.debezium.connector.oracle.logminer.processor.memory.MemoryLogMinerEventProcessor;
@@ -153,31 +154,20 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
 
     public static final Field LOG_MINING_STRATEGY = Field.create("log.mining.strategy")
             .withDisplayName("Log Mining Strategy")
-            .withEnum(LogMiningStrategy.class, LogMiningStrategy.CATALOG_IN_REDO)
+            .withEnum(LogMiningStrategy.class, LogMiningStrategy.ONLINE_CATALOG)
             .withWidth(Width.MEDIUM)
             .withImportance(Importance.HIGH)
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTION_ADVANCED, 8))
             .withValidation(OracleConnectorConfig::validateLogMiningStrategy)
             .withDescription("There are strategies: Online catalog with faster mining but no captured DDL. Another - with data dictionary loaded into REDO LOG files");
 
-    public static final Field SNAPSHOT_ENHANCEMENT_TOKEN = Field.create("snapshot.enhance.predicate.scn")
+    public static final Field SNAPSHOT_ENHANCEMENT_TOKEN = Field.createInternal("snapshot.enhance.predicate.scn")
             .withDisplayName("A string to replace on snapshot predicate enhancement")
             .withType(Type.STRING)
             .withWidth(Width.MEDIUM)
             .withImportance(Importance.HIGH)
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_SNAPSHOT, 11))
             .withDescription("A token to replace on snapshot predicate template");
-
-    @Deprecated
-    public static final Field LOG_MINING_TRANSACTION_RETENTION = Field.create("log.mining.transaction.retention.hours")
-            .withDisplayName("Log Mining long running transaction retention")
-            .withType(Type.LONG)
-            .withWidth(Width.SHORT)
-            .withImportance(Importance.MEDIUM)
-            .withDefault(0)
-            .withValidation(Field::isNonNegativeLong)
-            .withDescription("Hours to keep long running transactions in transaction buffer between log mining " +
-                    "sessions. By default, all transactions are retained.");
 
     public static final Field LOG_MINING_TRANSACTION_RETENTION_MS = Field.create("log.mining.transaction.retention.ms")
             .withDisplayName("Log Mining long running transaction retention")
@@ -323,16 +313,6 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
             .withValidation(OracleConnectorConfig::validateUsernameExcludeList)
             .withDescription("Comma separated list of usernames to exclude from LogMiner query.");
 
-    @Deprecated
-    public static final Field LOG_MINING_ARCHIVE_DESTINATION_NAME = Field.create("log.mining.archive.destination.name")
-            .withDisplayName("Name of the archive log destination to be used for reading archive logs")
-            .withType(Type.STRING)
-            .withWidth(Width.MEDIUM)
-            .withImportance(Importance.LOW)
-            .withGroup(Field.createGroupEntry(Field.Group.CONNECTION_ADVANCED, 20))
-            .withDescription("Sets the specific archive log destination as the source for reading archive logs." +
-                    "When not set, the connector will automatically select the first LOCAL and VALID destination.");
-
     public static final Field ARCHIVE_DESTINATION_NAME = Field.create("archive.destination.name")
             .withDisplayName("Name of the archive log destination to be used for reading archive logs")
             .withType(Type.STRING)
@@ -341,16 +321,6 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTION_ADVANCED, 32))
             .withDescription("Sets the specific archive log destination as the source for reading archive logs." +
                     "When not set, the connector will automatically select the first LOCAL and VALID destination.");
-
-    @Deprecated
-    public static final Field LOG_MINING_ARCHIVE_LOG_HOURS = Field.create("log.mining.archive.log.hours")
-            .withDisplayName("Log Mining Archive Log Hours")
-            .withType(Type.LONG)
-            .withWidth(Width.SHORT)
-            .withImportance(Importance.LOW)
-            .withGroup(Field.createGroupEntry(Field.Group.CONNECTION_ADVANCED, 10))
-            .withDefault(0)
-            .withDescription("The number of hours in the past from SYSDATE to mine archive logs. Using 0 mines all available archive logs");
 
     public static final Field ARCHIVE_LOG_HOURS = Field.create("archive.log.hours")
             .withDisplayName("Archive Log Hours")
@@ -373,7 +343,9 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
                     System.lineSeparator() +
                     "infinispan_embedded - This option uses an embedded Infinispan cache to buffer transaction data and persist it to disk." + System.lineSeparator() +
                     System.lineSeparator() +
-                    "infinispan_remote - This option uses a remote Infinispan cluster to buffer transaction data and persist it to disk.");
+                    "infinispan_remote - This option uses a remote Infinispan cluster to buffer transaction data and persist it to disk." + System.lineSeparator() +
+                    System.lineSeparator() +
+                    "ehcache - Use ehcache in embedded mode to buffer transaction data and persist it to disk.");
 
     public static final Field LOG_MINING_BUFFER_TRANSACTION_EVENTS_THRESHOLD = Field.create("log.mining.buffer.transaction.events.threshold")
             .withDisplayName("The maximum number of events a transaction can have before being discarded.")
@@ -621,6 +593,51 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
             .withValidation(Field::isNonNegativeInteger)
             .withDescription("The number of attempts to retry database errors during snapshots before failing.");
 
+    public static final Field LOG_MINING_BUFFER_EHCACHE_GLOBAL_CONFIG = Field.create("log.mining.buffer.ehcache.global.config")
+            .withDisplayName("Defines any global configuration for the Ehcache transaction buffer")
+            .withType(Type.STRING)
+            .withWidth(Width.LONG)
+            .withImportance(Importance.LOW)
+            .withValidation(OracleConnectorConfig::validateEhCacheGlobalConfigField)
+            .withDescription("Specifies any Ehcache global configurations such as services or persistence. " +
+                    "This cannot include <cache/> nor <default-serializers/> tags as these are managed by Debezium.");
+
+    public static final Field LOG_MINING_BUFFER_EHCACHE_TRANSACTIONS_CONFIG = Field.create("log.mining.buffer.ehcache.transactions.config")
+            .withDisplayName("Defines the partial ehcache configuration for the transaction cache")
+            .withType(Type.STRING)
+            .withWidth(Width.LONG)
+            .withImportance(Importance.LOW)
+            .withValidation(OracleConnectorConfig::validateEhcacheConfigFieldRequired)
+            .withDescription("Specifies the inner body the Ehcache <cache/> tag for the transaction cache, but " +
+                    "should not include the <key-type/> nor the <value-type/> attributes as these are managed by Debezium.");
+
+    public static final Field LOG_MINING_BUFFER_EHCACHE_PROCESSED_TRANSACTIONS_CONFIG = Field.create("log.mining.buffer.ehcache.processedtransactions.config")
+            .withDisplayName("Defines the partial ehcache configuration for the processed transaction cache")
+            .withType(Type.STRING)
+            .withWidth(Width.LONG)
+            .withImportance(Importance.LOW)
+            .withValidation(OracleConnectorConfig::validateEhcacheConfigFieldRequired)
+            .withDescription("Specifies the inner body the Ehcache <cache/> tag for the processed transaction cache, but " +
+                    "should not include the <key-type/> nor the <value-type/> attributes as these are managed by Debezium.");
+
+    public static final Field LOG_MINING_BUFFER_EHCACHE_SCHEMA_CHANGES_CONFIG = Field.create("log.mining.buffer.ehcache.schemachanges.config")
+            .withDisplayName("Defines the partial ehcache configuration for the schema changes cache")
+            .withType(Type.STRING)
+            .withWidth(Width.LONG)
+            .withImportance(Importance.LOW)
+            .withValidation(OracleConnectorConfig::validateEhcacheConfigFieldRequired)
+            .withDescription("Specifies the inner body the Ehcache <cache/> tag for the schema changes cache, but " +
+                    "should not include the <key-type/> nor the <value-type/> attributes as these are managed by Debezium.");
+
+    public static final Field LOG_MINING_BUFFER_EHCACHE_EVENTS_CONFIG = Field.create("log.mining.buffer.ehcache.events.config")
+            .withDisplayName("Defines the partial ehcache configuration for the events cache")
+            .withType(Type.STRING)
+            .withWidth(Width.LONG)
+            .withImportance(Importance.LOW)
+            .withValidation(OracleConnectorConfig::validateEhcacheConfigFieldRequired)
+            .withDescription("Specifies the inner body the Ehcache <cache/> tag for the events cache, but " +
+                    "should not include the <key-type/> nor the <value-type/> attributes as these are managed by Debezium.");
+
     @Deprecated
     public static final Field LOG_MINING_CONTINUOUS_MINE = Field.create("log.mining.continuous.mine")
             .withDisplayName("Should log mining session configured with CONTINUOUS_MINE setting?")
@@ -631,6 +648,16 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
             .withValidation(Field::isBoolean)
             .withDescription("(Deprecated) if true, CONTINUOUS_MINE option will be added to the log mining session. " +
                     "This will manage log files switches seamlessly.");
+
+    public static final Field OBJECT_ID_CACHE_SIZE = Field.createInternal("object.id.cache.size")
+            .withDisplayName("Controls the maximum size of the object ID cache")
+            .withType(Type.INT)
+            .withWidth(Width.SHORT)
+            .withDefault(256)
+            .withImportance(Importance.LOW)
+            .withValidation(OracleConnectorConfig::validateObjectIdCacheSize)
+            .withDescription("The connector maintains a least-recently used cache of database table object ID to name mappings. "
+                    + "This controls the maximum capacity of this cache.");
 
     private static final ConfigDefinition CONFIG_DEFINITION = HistorizedRelationalDatabaseConnectorConfig.CONFIG_DEFINITION.edit()
             .name("Oracle")
@@ -645,6 +672,7 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
                     USER,
                     PASSWORD,
                     DATABASE_NAME,
+                    QUERY_TIMEOUT_MS,
                     PDB_NAME,
                     XSTREAM_SERVER_NAME,
                     SNAPSHOT_MODE,
@@ -657,7 +685,6 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
                     SNAPSHOT_LOCKING_MODE,
                     RAC_NODES,
                     INTERVAL_HANDLING_MODE,
-                    LOG_MINING_ARCHIVE_LOG_HOURS,
                     ARCHIVE_LOG_HOURS,
                     LOG_MINING_BATCH_SIZE_DEFAULT,
                     LOG_MINING_BATCH_SIZE_MIN,
@@ -666,13 +693,11 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
                     LOG_MINING_SLEEP_TIME_MIN_MS,
                     LOG_MINING_SLEEP_TIME_MAX_MS,
                     LOG_MINING_SLEEP_TIME_INCREMENT_MS,
-                    LOG_MINING_TRANSACTION_RETENTION,
                     LOG_MINING_TRANSACTION_RETENTION_MS,
                     LOG_MINING_ARCHIVE_LOG_ONLY_MODE,
                     LOB_ENABLED,
                     LOG_MINING_USERNAME_INCLUDE_LIST,
                     LOG_MINING_USERNAME_EXCLUDE_LIST,
-                    LOG_MINING_ARCHIVE_DESTINATION_NAME,
                     ARCHIVE_DESTINATION_NAME,
                     LOG_MINING_BUFFER_TYPE,
                     LOG_MINING_BUFFER_DROP_ON_STOP,
@@ -704,7 +729,13 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
                     OLR_HOST,
                     OLR_PORT,
                     SNAPSHOT_DATABASE_ERRORS_MAX_RETRIES,
-                    LOG_MINING_CONTINUOUS_MINE)
+                    LOG_MINING_CONTINUOUS_MINE,
+                    LOG_MINING_BUFFER_EHCACHE_GLOBAL_CONFIG,
+                    LOG_MINING_BUFFER_EHCACHE_TRANSACTIONS_CONFIG,
+                    LOG_MINING_BUFFER_EHCACHE_PROCESSED_TRANSACTIONS_CONFIG,
+                    LOG_MINING_BUFFER_EHCACHE_SCHEMA_CHANGES_CONFIG,
+                    LOG_MINING_BUFFER_EHCACHE_EVENTS_CONFIG,
+                    OBJECT_ID_CACHE_SIZE)
             .events(SOURCE_INFO_STRUCT_MAKER)
             .create();
 
@@ -719,7 +750,7 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
 
     public static final List<String> EXCLUDED_SCHEMAS = Collections.unmodifiableList(Arrays.asList("appqossys", "audsys",
             "ctxsys", "dvsys", "dbsfwuser", "dbsnmp", "ggsharedcap", "gsmadmin_internal", "lbacsys", "mdsys", "ojvmsys", "olapsys",
-            "orddata", "ordsys", "outln", "sys", "system", "wmsys", "xdb"));
+            "orddata", "ordsys", "outln", "sys", "system", "vecsys", "wmsys", "xdb"));
 
     private static final Logger LOGGER = LoggerFactory.getLogger(OracleConnectorConfig.class);
 
@@ -735,6 +766,7 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
     private final SnapshotLockingMode snapshotLockingMode;
     private final int queryFetchSize;
     private final int snapshotRetryDatabaseErrorsMaxRetries;
+    private final int objectIdToTableIdCacheSize;
 
     // LogMiner options
     private final LogMiningStrategy logMiningStrategy;
@@ -773,6 +805,7 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
     private final Set<String> logMiningSchemaChangesUsernameExcludes;
     private final Boolean logMiningIncludeRedoSql;
     private final boolean logMiningContinuousMining;
+    private final Configuration logMiningEhCacheConfiguration;
 
     private final String openLogReplicatorSource;
     private final String openLogReplicatorHostname;
@@ -797,6 +830,7 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
         this.connectorAdapter = ConnectorAdapter.parse(config.getString(CONNECTOR_ADAPTER));
         this.snapshotLockingMode = SnapshotLockingMode.parse(config.getString(SNAPSHOT_LOCKING_MODE), SNAPSHOT_LOCKING_MODE.defaultValueAsString());
         this.lobEnabled = config.getBoolean(LOB_ENABLED);
+        this.objectIdToTableIdCacheSize = config.getInteger(OBJECT_ID_CACHE_SIZE);
 
         this.streamingAdapter = this.connectorAdapter.getInstance(this);
         if (this.streamingAdapter == null) {
@@ -809,7 +843,7 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
         // LogMiner
         this.logMiningStrategy = LogMiningStrategy.parse(config.getString(LOG_MINING_STRATEGY));
         this.racNodes = resolveRacNodes(config);
-        this.archiveLogRetention = resolveArchiveLogHours(config);
+        this.archiveLogRetention = config.getDuration(ARCHIVE_LOG_HOURS, ChronoUnit.HOURS);
         this.logMiningBatchSizeMin = config.getInteger(LOG_MINING_BATCH_SIZE_MIN);
         this.logMiningBatchSizeMax = config.getInteger(LOG_MINING_BATCH_SIZE_MAX);
         this.logMiningBatchSizeDefault = config.getInteger(LOG_MINING_BATCH_SIZE_DEFAULT);
@@ -817,11 +851,11 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
         this.logMiningSleepTimeMax = Duration.ofMillis(config.getInteger(LOG_MINING_SLEEP_TIME_MAX_MS));
         this.logMiningSleepTimeDefault = Duration.ofMillis(config.getInteger(LOG_MINING_SLEEP_TIME_DEFAULT_MS));
         this.logMiningSleepTimeIncrement = Duration.ofMillis(config.getInteger(LOG_MINING_SLEEP_TIME_INCREMENT_MS));
-        this.logMiningTransactionRetention = resolveLogMiningTransactionRetentionDuration(config);
+        this.logMiningTransactionRetention = config.getDuration(LOG_MINING_TRANSACTION_RETENTION_MS, ChronoUnit.MILLIS);
         this.archiveLogOnlyMode = config.getBoolean(LOG_MINING_ARCHIVE_LOG_ONLY_MODE);
         this.logMiningUsernameIncludes = Strings.setOfTrimmed(config.getString(LOG_MINING_USERNAME_INCLUDE_LIST), String::new);
         this.logMiningUsernameExcludes = Strings.setOfTrimmed(config.getString(LOG_MINING_USERNAME_EXCLUDE_LIST), String::new);
-        this.archiveLogDestinationName = resolveArchiveLogDestinationName(config);
+        this.archiveLogDestinationName = config.getString(ARCHIVE_DESTINATION_NAME);
         this.logMiningBufferType = LogMiningBufferType.parse(config.getString(LOG_MINING_BUFFER_TYPE));
         this.logMiningBufferTransactionEventsThreshold = config.getLong(LOG_MINING_BUFFER_TRANSACTION_EVENTS_THRESHOLD);
         this.logMiningBufferDropOnStop = config.getBoolean(LOG_MINING_BUFFER_DROP_ON_STOP);
@@ -843,38 +877,12 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
         this.logMiningIncludeRedoSql = config.getBoolean(LOG_MINING_INCLUDE_REDO_SQL);
         this.logMiningContinuousMining = config.getBoolean(LOG_MINING_CONTINUOUS_MINE);
 
+        this.logMiningEhCacheConfiguration = config.subset("log.mining.buffer.ehcache", false);
+
         // OpenLogReplicator
         this.openLogReplicatorSource = config.getString(OLR_SOURCE);
         this.openLogReplicatorHostname = config.getString(OLR_HOST);
         this.openLogReplicatorPort = config.getInteger(OLR_PORT, 0);
-    }
-
-    private String resolveArchiveLogDestinationName(Configuration config) {
-
-        String archiveLogDestinationName = config.getString(ARCHIVE_DESTINATION_NAME);
-        String logMiningArchiveLogDestinationName = config.getString(LOG_MINING_ARCHIVE_DESTINATION_NAME);
-        if (archiveLogDestinationName == null) {
-            if (logMiningArchiveLogDestinationName != null) {
-                LOGGER.warn("The option {} is deprecated and replaced by {} and will be removed in a future build.",
-                        LOG_MINING_ARCHIVE_DESTINATION_NAME.name(), ARCHIVE_DESTINATION_NAME.name());
-                return logMiningArchiveLogDestinationName;
-            }
-        }
-        return archiveLogDestinationName;
-    }
-
-    private Duration resolveArchiveLogHours(Configuration config) {
-
-        Duration archiveLogHours = config.getDuration(ARCHIVE_LOG_HOURS, ChronoUnit.HOURS);
-        Duration logMiningArchiveLogHours = config.getDuration(LOG_MINING_ARCHIVE_LOG_HOURS, ChronoUnit.HOURS);
-        if (archiveLogHours.isZero()) {
-            if (!logMiningArchiveLogHours.isZero()) {
-                LOGGER.warn("The option {} is deprecated and replaced by {} and will be removed in a future build.",
-                        LOG_MINING_ARCHIVE_LOG_HOURS.name(), ARCHIVE_LOG_HOURS.name());
-                return logMiningArchiveLogHours;
-            }
-        }
-        return archiveLogHours;
     }
 
     private static String toUpperCase(String property) {
@@ -1451,6 +1459,21 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
                 return new RemoteInfinispanLogMinerEventProcessor(context, connectorConfig, connection, dispatcher,
                         partition, offsetContext, schema, metrics);
             }
+        },
+
+        EHCACHE("ehcache") {
+            @Override
+            public LogMinerEventProcessor createProcessor(ChangeEventSourceContext context,
+                                                          OracleConnectorConfig connectorConfig,
+                                                          OracleConnection connection,
+                                                          EventDispatcher<OraclePartition, TableId> dispatcher,
+                                                          OraclePartition partition,
+                                                          OracleOffsetContext offsetContext,
+                                                          OracleDatabaseSchema schema,
+                                                          LogMinerStreamingChangeEventSourceMetrics metrics) {
+                return new EhcacheLogMinerEventProcessor(context, connectorConfig, connection, dispatcher,
+                        partition, offsetContext, schema, metrics);
+            }
         };
 
         private final String value;
@@ -1474,11 +1497,15 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
         }
 
         public boolean isInfinispan() {
-            return !MEMORY.equals(this);
+            return INFINISPAN_EMBEDDED.equals(this) || INFINISPAN_REMOTE.equals(this);
         }
 
         public boolean isInfinispanEmbedded() {
-            return isInfinispan() && INFINISPAN_EMBEDDED.equals(this);
+            return INFINISPAN_EMBEDDED.equals(this);
+        }
+
+        public boolean isEhcache() {
+            return EHCACHE.equals(this);
         }
 
         public static LogMiningBufferType parse(String value) {
@@ -1931,6 +1958,25 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
         return openLogReplicatorPort;
     }
 
+    /**
+     * Get the Ehcache buffer configuration, which is all attributes under the configuration prefix
+     * "log.mining.buffer.ehcache" namespace, with the prefix removed.
+     *
+      * @return the ehcache transaction buffer configuration, never {@code null}
+     */
+    public Configuration getLogMiningEhcacheConfiguration() {
+        return logMiningEhCacheConfiguration;
+    }
+
+    /**
+     * Return the object id to table id cache size
+     *
+     * @return the maximum size of the object id to table id cache
+     */
+    public int getObjectIdToTableIdCacheSize() {
+        return objectIdToTableIdCacheSize;
+    }
+
     @Override
     public String getConnectorName() {
         return Module.name();
@@ -1950,20 +1996,6 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
                 return node;
             }
         }).collect(Collectors.toSet());
-    }
-
-    private Duration resolveLogMiningTransactionRetentionDuration(Configuration config) {
-        // Calculate the log mining transaction retention between the two properties
-        Duration logMiningTransactionRetentionMs = config.getDuration(LOG_MINING_TRANSACTION_RETENTION_MS, ChronoUnit.MILLIS);
-        Duration logMiningTransactionRetentionHours = config.getDuration(LOG_MINING_TRANSACTION_RETENTION, ChronoUnit.HOURS);
-        if (logMiningTransactionRetentionMs.isZero()) {
-            if (!logMiningTransactionRetentionHours.isZero()) {
-                LOGGER.warn("The option {} is deprecated and replaced by {} and will be removed in a future build.",
-                        LOG_MINING_TRANSACTION_RETENTION.name(), LOG_MINING_TRANSACTION_RETENTION_MS.name());
-                return logMiningTransactionRetentionHours;
-            }
-        }
-        return logMiningTransactionRetentionMs;
     }
 
     public static int validateOutServerName(Configuration config, Field field, ValidationOutput problems) {
@@ -2116,5 +2148,39 @@ public class OracleConnectorConfig extends HistorizedRelationalDatabaseConnector
             }
         }
         return 0;
+    }
+
+    public static int validateEhCacheGlobalConfigField(Configuration config, Field field, ValidationOutput problems) {
+        if (ConnectorAdapter.LOG_MINER.equals(ConnectorAdapter.parse(config.getString(CONNECTOR_ADAPTER)))) {
+            if (LogMiningBufferType.parse(config.getString(LOG_MINING_BUFFER_TYPE)).isEhcache()) {
+                // The string cannot include any `<cache ` or `<default-serializers` tags.
+                final String globalConfig = config.getString(LOG_MINING_BUFFER_EHCACHE_GLOBAL_CONFIG, "").toLowerCase();
+                if (!Strings.isNullOrEmpty(globalConfig)) {
+                    if (globalConfig.contains("<cache") || globalConfig.contains("<default-serializers")) {
+                        problems.accept(LOG_MINING_BUFFER_EHCACHE_GLOBAL_CONFIG, globalConfig,
+                                "The ehcache global configuration should not contain a <cache/> or <default-serializers/> section");
+                        return 1;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+
+    public static int validateEhcacheConfigFieldRequired(Configuration config, Field field, ValidationOutput problems) {
+        if (ConnectorAdapter.LOG_MINER.equals(ConnectorAdapter.parse(config.getString(CONNECTOR_ADAPTER)))) {
+            if (LogMiningBufferType.parse(config.getString(LOG_MINING_BUFFER_TYPE)).isEhcache()) {
+                return Field.isRequired(config, field, problems);
+            }
+        }
+        return 0;
+    }
+
+    public static int validateObjectIdCacheSize(Configuration config, Field field, ValidationOutput problems) {
+        int result = Field.isRequired(config, field, problems);
+        if (result != 0) {
+            return result;
+        }
+        return Field.isPositiveInteger(config, field, problems);
     }
 }

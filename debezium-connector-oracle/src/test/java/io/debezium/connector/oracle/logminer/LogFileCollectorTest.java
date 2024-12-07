@@ -201,14 +201,21 @@ public class LogFileCollectorTest {
         files.add(createRedoLog("group_303.8411.1106167689", 10403072997229L, 56770, 3));
         files.add(createArchiveLog("thread_4_seq_62925.29497.1152789389", 10403069930249L, 10403071899909L, 62925, 4));
         files.add(createRedoLog("group_401.8418.1106167699", 10403071899909L, 62926, 4));
-        files.add(createRedoLog("group_201.8400.1106167673", 10326919867728L, 10326919867733L, 78034, 2, false));
-        files.add(createRedoLog("group_202.8401.1106167675", 10326919867733L, 10326919910394L, 78035, 2, false));
-        files.add(createRedoLog("group_203.8402.1106167677", 10326919910394L, 10326919923665L, 78036, 2, false));
-        files.add(createRedoLog("group_101.8391.1106167659", 10326919867747L, 10326919867788L, 83112, 1, false));
-        files.add(createRedoLog("group_102.8392.1106167661", 10326919867788L, 10326919910390L, 83113, 1, false));
-        files.add(createRedoLog("group_103.8393.1106167663", 10326919910390L, 10326919923663L, 83114, 1, false));
+        // These logs would have not been pulled since they don't contain the read position or come after read position
+        // files.add(createRedoLog("group_201.8400.1106167673", 10326919867728L, 10326919867733L, 78034, 2, false));
+        // files.add(createRedoLog("group_202.8401.1106167675", 10326919867733L, 10326919910394L, 78035, 2, false));
+        // files.add(createRedoLog("group_203.8402.1106167677", 10326919910394L, 10326919923665L, 78036, 2, false));
+        // files.add(createRedoLog("group_101.8391.1106167659", 10326919867747L, 10326919867788L, 83112, 1, false));
+        // files.add(createRedoLog("group_102.8392.1106167661", 10326919867788L, 10326919910390L, 83113, 1, false));
+        // files.add(createRedoLog("group_103.8393.1106167663", 10326919910390L, 10326919923663L, 83114, 1, false));
 
-        final RedoThreadState state = getFourThreadOpenState(Scn.valueOf(10326919867700L), Scn.valueOf(10326919867700L));
+        RedoThreadState.Builder builder = RedoThreadState.builder();
+        builder = makeClosedRedoThreadState(builder.thread(), 1, Scn.valueOf(10326919860000L), Scn.valueOf(10326919923663L)).build();
+        builder = makeClosedRedoThreadState(builder.thread(), 2, Scn.valueOf(10326919860000L), Scn.valueOf(10326919923665L)).build();
+        builder = makeOpenRedoThreadState(builder.thread(), 3, Scn.valueOf(10326919867700L), Scn.valueOf(10326919867700L)).build();
+        builder = makeOpenRedoThreadState(builder.thread(), 4, Scn.valueOf(10326919867700L), Scn.valueOf(10326919867700L)).build();
+
+        final RedoThreadState state = builder.build();
         assertThat(getLogFileCollector(state).isLogFileListConsistent(Scn.valueOf("10403071210665"), files, state)).isTrue();
     }
 
@@ -1462,7 +1469,7 @@ public class LogFileCollectorTest {
         final OracleConnection connection = getOracleConnectionMock(redoThreadState, files);
         final LogFileCollector collector = getLogFileCollector(config, connection);
 
-        final List<LogFile> result = collector.getLogs(Scn.valueOf(10));
+        final List<LogFile> result = collector.getLogs(Scn.valueOf(103401));
         assertThat(result).hasSize(2);
         assertThat(getLogFileWithName(result, "logfile1").getNextScn()).isEqualTo(Scn.valueOf(103700));
         assertThat(getLogFileWithName(result, "logfile2").getNextScn()).isEqualTo(Scn.MAX);
@@ -1501,7 +1508,7 @@ public class LogFileCollectorTest {
         final OracleConnection connection = getOracleConnectionMock(redoThreadState, files);
         final LogFileCollector collector = getLogFileCollector(config, connection);
 
-        final List<LogFile> result = collector.getLogs(Scn.valueOf(600));
+        final List<LogFile> result = collector.getLogs(Scn.valueOf(103301));
         assertThat(result).hasSize(3);
         assertThat(getLogFileWithName(result, "logfile2").getNextScn()).isEqualTo(Scn.MAX);
     }
@@ -1520,7 +1527,7 @@ public class LogFileCollectorTest {
         final OracleConnection connection = getOracleConnectionMock(redoThreadState, files);
         final LogFileCollector collector = getLogFileCollector(config, connection);
 
-        final List<LogFile> result = collector.getLogs(Scn.valueOf(600));
+        final List<LogFile> result = collector.getLogs(Scn.valueOf(103301));
         assertThat(result).hasSize(3);
         assertThat(getLogFileWithName(result, "logfile2").getNextScn()).isEqualTo(Scn.MAX);
     }
@@ -1541,7 +1548,7 @@ public class LogFileCollectorTest {
         final OracleConnection connection = getOracleConnectionMock(redoThreadState, files);
         final LogFileCollector collector = getLogFileCollector(config, connection);
 
-        final List<LogFile> result = collector.getLogs(Scn.valueOf(600));
+        final List<LogFile> result = collector.getLogs(Scn.valueOf(103301));
         assertThat(result).hasSize(3);
         assertThat(getLogFileWithName(result, "logfile2").getNextScn()).isEqualTo(Scn.valueOf(largeScnValue));
     }
@@ -1768,6 +1775,195 @@ public class LogFileCollectorTest {
         assertThat(collector.getLogs(Scn.ONE)).isEqualTo(files);
     }
 
+    @Test
+    @FixFor("DBZ-8144")
+    public void testOpenRedoThreadSwitchDoesNotMissArchiveLogIfNotYetAvailable() throws Exception {
+        // In this scenario, a redo log has recently transitioned to the archive, and the entry
+        // in the V$ARCHIVED_LOG table has not yet appeared; however by all accounts there are
+        // no log sequence gaps since the only log read is the online redo.
+        final RedoThreadState redoThreadState = RedoThreadState.builder()
+                .thread()
+                .threadId(1)
+                .enabled("PUBLIC")
+                .enabledScn(Scn.valueOf(12345))
+                .status("OPEN")
+                .checkpointScn(Scn.valueOf(1234567240))
+                .lastRedoScn(Scn.valueOf(1234567890))
+                .lastRedoSequenceNumber(1065L)
+                .build()
+                .build();
+
+        final List<LogFile> files = new ArrayList<>();
+        files.add(createRedoLog("redo0", 1234567800, 1065, 1));
+
+        final Configuration config = getDefaultConfig().build();
+        final OracleConnection connection = getOracleConnectionMock(redoThreadState);
+
+        // This should be false because the read position is before the redo logs scn
+        LogFileCollector collector = setCollectorLogFiles(getLogFileCollector(config, connection), files);
+        assertThat(collector.isLogFileListConsistent(Scn.valueOf(1234567250), files, redoThreadState)).isFalse();
+
+        // Now add the archive log to the collected files
+        files.add(createArchiveLog("arc0", 123456700, 1234567800, 1064, 1));
+
+        // This should be true because the read position is within one log
+        collector = setCollectorLogFiles(getLogFileCollector(config, connection), files);
+        assertThat(collector.isLogFileListConsistent(Scn.valueOf(1234567250), files, redoThreadState)).isTrue();
+    }
+
+    @Test
+    @FixFor("DBZ-8162")
+    public void testOpenRedoThreadAfterBeingDoesNotBecomeInconsistent() throws Exception {
+        // In this scenario, a node in the RAC cluster is taken down for a period of time duration a
+        // maintenance window. The connector and environment continue onward for some time and the
+        // DBA brings the node back online, at which point the open log check for SCN should not fail.
+        RedoThreadState redoThreadState = RedoThreadState.builder()
+                .thread()
+                .threadId(1)
+                .status("OPEN")
+                .enabled("PUBLIC")
+                .enabledScn(Scn.valueOf(1918873))
+                .checkpointScn(Scn.valueOf(14338976116101L))
+                .lastRedoScn(Scn.valueOf(14339038344586L))
+                .lastRedoSequenceNumber(164492L)
+                .build()
+                .thread()
+                .threadId(2)
+                .status("OPEN")
+                .enabled("PUBLIC")
+                .enabledScn(Scn.valueOf(2028329))
+                .checkpointScn(Scn.valueOf(14338976116789L))
+                .lastRedoScn(Scn.valueOf(14339038344484L))
+                .lastRedoSequenceNumber(138697L)
+                .build()
+                .build();
+
+        final List<LogFile> files = new ArrayList<>();
+        files.add(createArchiveLog("thread_2_seq_138697.5633.1177608211", 14338976116789L, 14339038344652L, 138697, 2));
+        files.add(createRedoLog("group_5.273.1086113793", 14339038344652L, 138698, 2));
+        files.add(createRedoLog("group_2.270.1086113793", 14339038343718L, 164492, 1));
+
+        final Configuration config = getDefaultConfig().build();
+        final OracleConnection connection = getOracleConnectionMock(redoThreadState);
+
+        // Logs should be consistent
+        LogFileCollector collector = setCollectorLogFiles(getLogFileCollector(config, connection), files);
+        assertThat(collector.isLogFileListConsistent(Scn.valueOf(14339038344480L), files, redoThreadState)).isTrue();
+
+        // Transition Node 2 to CLOSED
+        redoThreadState = RedoThreadState.builder()
+                .thread()
+                .threadId(1)
+                .status("OPEN")
+                .enabled("PUBLIC")
+                .enabledScn(Scn.valueOf(1918873))
+                .checkpointScn(Scn.valueOf(14339038343718L))
+                .lastRedoScn(Scn.valueOf(14339070179636L))
+                .lastRedoSequenceNumber(164492L)
+                .build()
+                .thread()
+                .threadId(2)
+                .status("CLOSED")
+                .enabled("PUBLIC")
+                .enabledScn(Scn.valueOf(2028329))
+                .checkpointScn(Scn.valueOf(14339070179724L))
+                .lastRedoScn(Scn.valueOf(14339070179614L))
+                .lastRedoSequenceNumber(138698L)
+                .build()
+                .build();
+
+        files.clear();
+        files.add(createArchiveLog("thread_2_seq_138698.6821.1177608599", 14339038344652L, 14339070179726L, 138698, 2));
+        files.add(createRedoLog("group_2.270.1086113793", 14339038343718L, 164492, 1));
+
+        collector = setCollectorLogFiles(getLogFileCollector(config, connection), files);
+        assertThat(collector.isLogFileListConsistent(Scn.valueOf(14339070176922L), files, redoThreadState)).isTrue();
+
+        // Re-open node 2
+        redoThreadState = RedoThreadState.builder()
+                .thread()
+                .threadId(1)
+                .status("OPEN")
+                .enabled("PUBLIC")
+                .enabledScn(Scn.valueOf(1918873))
+                .checkpointScn(Scn.valueOf(14339038343718L))
+                .lastRedoScn(Scn.valueOf(14339074283009L))
+                .lastRedoSequenceNumber(164492L)
+                .build()
+                .thread()
+                .threadId(2)
+                .status("OPEN")
+                .enabled("PUBLIC")
+                .enabledScn(Scn.valueOf(2028329))
+                .checkpointScn(Scn.valueOf(14339074283022L))
+                .lastRedoScn(Scn.valueOf(14339070179614L))
+                .lastRedoSequenceNumber(138698L)
+                .build()
+                .build();
+
+        files.clear();
+        files.add(createArchiveLog("archive", 14339070179726L, 14339074283016L, 138698, 2));
+        files.add(createRedoLog("group_6.274.1086113795", 14339074283016L, 138699, 2));
+        files.add(createRedoLog("group_2.270.1086113793", 14339038343718L, 164492, 1));
+
+        collector = setCollectorLogFiles(getLogFileCollector(config, connection), files);
+        assertThat(collector.isLogFileListConsistent(Scn.valueOf(14339074282971L), files, redoThreadState)).isTrue();
+    }
+
+    @Test
+    @FixFor("DBZ-8389")
+    public void testOpenRedoThreadLogSwitchMissingArchiveLogGapWithImmediateCheckpoint() throws Exception {
+        RedoThreadState redoThreadState = RedoThreadState.builder()
+                .thread()
+                .threadId(1)
+                .status("OPEN")
+                .enabled("PUBLIC")
+                .enabledScn(Scn.valueOf(1918873))
+                .checkpointScn(Scn.valueOf(14338976116101L))
+                .lastRedoScn(Scn.valueOf(14339038344586L))
+                .lastRedoSequenceNumber(164492L)
+                .build()
+                .build();
+
+        final List<LogFile> files = new ArrayList<>();
+        files.add(createRedoLog("group_2.270.1086113793", 14339038343718L, 164492, 1));
+
+        final Configuration config = getDefaultConfig().build();
+        final OracleConnection connection = getOracleConnectionMock(redoThreadState);
+
+        // Logs should be consistent
+        LogFileCollector collector = setCollectorLogFiles(getLogFileCollector(config, connection), files);
+        assertThat(collector.isLogFileListConsistent(Scn.valueOf(14339038344480L), files, redoThreadState)).isTrue();
+
+        // Now roll the redo log to the archive but exclude the archive log from the log list.
+        // This mimics the ARC process being slow. We'll also apply a checkpoint on the thread
+        // state, which should no longer matter and be treated as consistent.
+        redoThreadState = RedoThreadState.builder()
+                .thread()
+                .threadId(1)
+                .status("OPEN")
+                .enabled("PUBLIC")
+                .enabledScn(Scn.valueOf(1918873))
+                .checkpointScn(Scn.valueOf(14339038344490L))
+                .lastRedoScn(Scn.valueOf(143390383445686L))
+                .lastRedoSequenceNumber(164493L)
+                .build()
+                .build();
+
+        files.clear();
+        files.add(createRedoLog("group_2.271.1086113794", 14339038344718L, 164493, 1));
+
+        collector = setCollectorLogFiles(getLogFileCollector(config, connection), files);
+        assertThat(collector.isLogFileListConsistent(Scn.valueOf(14339038344580L), files, redoThreadState)).isFalse();
+
+        // Now add the archive log
+        // This simulates the ARC process catching up and having no gaps
+        files.add(createArchiveLog("archive", 14339038343718L, 14339038344718L, 164492, 1));
+
+        collector = setCollectorLogFiles(getLogFileCollector(config, connection), files);
+        assertThat(collector.isLogFileListConsistent(Scn.valueOf(14339038344580L), files, redoThreadState)).isTrue();
+    }
+
     private static LogFile createRedoLog(String name, long startScn, int sequence, int threadId) {
         return createRedoLog(name, startScn, Long.MAX_VALUE, sequence, threadId);
     }
@@ -1908,6 +2104,29 @@ public class LogFileCollectorTest {
                 .openTime(Instant.now().minus(10, ChronoUnit.MINUTES))
                 .checkpointTime(Instant.now().minus(5, ChronoUnit.MINUTES))
                 .checkpointScn(enabledScn.add(Scn.ONE))
+                .currentGroupNumber(1L)
+                .currentSequenceNumber(1L)
+                .enabledScn(enabledScn)
+                .enabledTime(Instant.now().minus(10, ChronoUnit.MINUTES))
+                .disabledScn(Scn.valueOf(0))
+                .disabledTime(null)
+                .lastRedoScn(lastFlushedScn)
+                .lastRedoBlock(1234L)
+                .lastRedoSequenceNumber(2L)
+                .lastRedoTime(Instant.now().minus(3, ChronoUnit.SECONDS))
+                .conId(0L);
+    }
+
+    private RedoThread.Builder makeClosedRedoThreadState(RedoThread.Builder builder,
+                                                         int threadId, Scn enabledScn, Scn lastFlushedScn) {
+        return builder.threadId(threadId)
+                .status("CLOSED")
+                .enabled("PUBLIC")
+                .instanceName("ORCLCDB")
+                .logGroups(2L)
+                .openTime(Instant.now().minus(10, ChronoUnit.MINUTES))
+                .checkpointTime(Instant.now().minus(5, ChronoUnit.MINUTES))
+                .checkpointScn(lastFlushedScn.add(Scn.ONE))
                 .currentGroupNumber(1L)
                 .currentSequenceNumber(1L)
                 .enabledScn(enabledScn)

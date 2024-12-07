@@ -15,7 +15,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -78,6 +77,7 @@ import io.debezium.connector.postgresql.connection.PostgresReplicationConnection
 import io.debezium.connector.postgresql.connection.ReplicaIdentityInfo;
 import io.debezium.connector.postgresql.connection.ReplicationConnection;
 import io.debezium.connector.postgresql.connection.pgoutput.PgOutputMessageDecoder;
+import io.debezium.connector.postgresql.junit.PostgresDatabaseVersionResolver;
 import io.debezium.connector.postgresql.junit.SkipTestDependingOnDecoderPluginNameRule;
 import io.debezium.connector.postgresql.junit.SkipWhenDecoderPluginNameIs;
 import io.debezium.connector.postgresql.junit.SkipWhenDecoderPluginNameIsNot;
@@ -86,7 +86,7 @@ import io.debezium.converters.CloudEventsConverterTest;
 import io.debezium.data.Envelope;
 import io.debezium.data.VerifyRecord;
 import io.debezium.doc.FixFor;
-import io.debezium.embedded.AbstractConnectorTest;
+import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
 import io.debezium.engine.DebeziumEngine;
 import io.debezium.heartbeat.Heartbeat;
 import io.debezium.jdbc.JdbcConfiguration;
@@ -108,7 +108,7 @@ import io.debezium.util.Strings;
  *
  * @author Horia Chiorean (hchiorea@redhat.com)
  */
-public class PostgresConnectorIT extends AbstractConnectorTest {
+public class PostgresConnectorIT extends AbstractAsyncEngineConnectorTest {
 
     /*
      * Specific tests that need to extend the initial DDL set should do it in a form of
@@ -1248,7 +1248,7 @@ public class PostgresConnectorIT extends AbstractConnectorTest {
                 .with(PostgresConnectorConfig.SNAPSHOT_MODE, SnapshotMode.NO_DATA.getValue())
                 .with(PostgresConnectorConfig.DROP_SLOT_ON_STOP, Boolean.FALSE)
                 .with(PostgresConnectorConfig.REPLICA_IDENTITY_AUTOSET_VALUES, "s1.a:FULL,s2.a:DEFAULT")
-                .with(PostgresConnectorConfig.PUBLICATION_AUTOCREATE_MODE, "DISABLED")
+                .with(PostgresConnectorConfig.PUBLICATION_AUTOCREATE_MODE, PostgresConnectorConfig.AutoCreateMode.DISABLED.getValue())
                 .with("database.user", "role_2")
                 .with("database.password", "role_2_pass")
                 .build();
@@ -2323,6 +2323,58 @@ public class PostgresConnectorIT extends AbstractConnectorTest {
 
         stopConnector(value -> assertThat(logInterceptor.containsMessage("Creating new publication 'cdc' for plugin 'PGOUTPUT'")).isTrue());
         assertTrue(TestHelper.publicationExists("cdc"));
+    }
+
+    @Test
+    @SkipWhenDatabaseVersion(check = LESS_THAN, major = 17, reason = "Failover slots only supported on PG 17+")
+    @FixFor("DBZ-8412")
+    public void shouldNotCreateFailOverSlotByDefault() {
+        start(PostgresConnector.class, TestHelper.defaultConfig()
+                .with(PostgresConnectorConfig.SLOT_NAME, "non_failover_slot")
+                .with(PostgresConnectorConfig.PLUGIN_NAME, "pgoutput")
+                .build());
+
+        assertConnectorIsRunning();
+
+        try (PostgresConnection conn = TestHelper.create()) {
+            assertThat(existsAndHasExpectedFailOverState("non_failover_slot", false, conn)).isTrue();
+        }
+
+        stopConnector();
+    }
+
+    @Test
+    @SkipWhenDatabaseVersion(check = LESS_THAN, major = 17, reason = "Failover slots only supported on PG 17+")
+    @FixFor("DBZ-8412")
+    public void shouldCreateFailOverSlot() {
+        start(PostgresConnector.class, TestHelper.defaultConfig()
+                .with(PostgresConnectorConfig.CREATE_FAIL_OVER_SLOT, true)
+                .with(PostgresConnectorConfig.SLOT_NAME, "failover_slot")
+                .with(PostgresConnectorConfig.PLUGIN_NAME, "pgoutput")
+                .build());
+
+        assertConnectorIsRunning();
+
+        try (PostgresConnection conn = TestHelper.create()) {
+            assertThat(existsAndHasExpectedFailOverState("failover_slot", true, conn)).isTrue();
+        }
+
+        stopConnector();
+    }
+
+    private boolean existsAndHasExpectedFailOverState(String slotName, boolean isFailOverSlot, PostgresConnection connection) {
+        try {
+            return connection.queryAndMap("select failover from pg_replication_slots where slot_name = '" + slotName + "'", rs -> {
+                if (!rs.next()) {
+                    return false;
+                }
+
+                return rs.getBoolean(1) == isFailOverSlot;
+            });
+        }
+        catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Test
@@ -3418,7 +3470,8 @@ public class PostgresConnectorIT extends AbstractConnectorTest {
                 .atMost(waitTimeForRecords() * 30L, TimeUnit.SECONDS)
                 .until(() -> finished.get());
         assertThat(status.get()).isFalse();
-        assertNull(error.get());
+        assertNotNull(error.get());
+        assertThat(error.get()).isInstanceOf(DebeziumException.class);
         assertThat(message.get()).contains("snapshot.mode.custom.name cannot be empty when snapshot.mode 'custom' is defined");
     }
 
@@ -3517,6 +3570,57 @@ public class PostgresConnectorIT extends AbstractConnectorTest {
             Struct source = ((Struct) sourceRecord.value()).getStruct("source");
             assertEquals("io.debezium.connector.postgresql.Source", source.schema().name());
             assertNotNull(source.getInt64(SourceInfo.LSN_KEY));
+        });
+    }
+
+    @Test
+    public void shouldFailWhenReadOnlyIsNotSupported() {
+
+        PostgresDatabaseVersionResolver databaseVersionResolver = new PostgresDatabaseVersionResolver();
+
+        start(PostgresConnector.class, TestHelper.defaultConfig()
+                .with(PostgresConnectorConfig.READ_ONLY_CONNECTION, true)
+                .build(), (success, message, error) -> {
+
+                    if (databaseVersionResolver.getVersion().isLessThan(13, 0, 0)) {
+                        assertThat(error)
+                                .isInstanceOf(DebeziumException.class)
+                                .hasMessage("Read only is not supported for version minor to 13");
+                    }
+                    else {
+                        assertTrue(success);
+                    }
+                });
+    }
+
+    @Test
+    @FixFor("DBZ-8156")
+    @SkipWhenDecoderPluginNameIsNot(value = SkipWhenDecoderPluginNameIsNot.DecoderPluginName.PGOUTPUT, reason = "Publication configuration only valid for PGOUTPUT decoder")
+    public void shouldProduceOnlyLogicalDecodingMessages() throws Exception {
+        TestHelper.dropAllSchemas();
+        TestHelper.dropPublication("cdc");
+
+        Configuration.Builder configBuilder = TestHelper.defaultConfig()
+                .with(PostgresConnectorConfig.PUBLICATION_NAME, "cdc")
+                .with(PostgresConnectorConfig.PUBLICATION_AUTOCREATE_MODE, PostgresConnectorConfig.AutoCreateMode.NO_TABLES.getValue());
+
+        start(PostgresConnector.class, configBuilder.build());
+        assertConnectorIsRunning();
+        waitForSnapshotToBeCompleted();
+
+        TestHelper.execute("SELECT pg_logical_emit_message(false, 'foo', '{}');");
+        SourceRecords actualRecords = consumeRecordsByTopic(1);
+        assertThat(actualRecords.topics()).hasSize(1);
+
+        List<SourceRecord> logicalDecodingMessages = actualRecords.recordsForTopic(topicName("message"));
+        assertThat(logicalDecodingMessages).hasSize(1);
+        logicalDecodingMessages.forEach(sourceRecord -> {
+            assertTrue(sourceRecord.value() instanceof Struct);
+            assertEquals("m", ((Struct) sourceRecord.value()).getString("op"));
+
+            Struct message = ((Struct) sourceRecord.value()).getStruct("message");
+            assertEquals("foo", message.getString("prefix"));
+            assertEquals("{}", new String(message.getBytes("content")));
         });
     }
 

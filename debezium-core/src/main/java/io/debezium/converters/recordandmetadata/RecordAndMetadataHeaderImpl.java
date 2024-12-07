@@ -15,6 +15,7 @@ import org.apache.kafka.connect.data.SchemaAndValue;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.json.JsonConverter;
 
+import io.debezium.DebeziumException;
 import io.debezium.converters.CloudEventsConverterConfig.MetadataSource;
 import io.debezium.converters.CloudEventsConverterConfig.MetadataSourceValue;
 import io.debezium.converters.spi.CloudEventsMaker;
@@ -93,8 +94,13 @@ public class RecordAndMetadataHeaderImpl extends RecordAndMetadataBaseImpl imple
 
     private SchemaAndValue getHeaderSchemaAndValue(Headers headers, String headerName, boolean isOptional) {
         Header header = headers.lastHeader(headerName);
-        if (header == null && !isOptional) {
-            throw new RuntimeException("Header `" + headerName + "` was not provided");
+        if (header == null) {
+            if (isOptional) {
+                return SchemaAndValue.NULL;
+            }
+            else {
+                throw new DebeziumException("Header `" + headerName + "` was not provided");
+            }
         }
         return jsonHeaderConverter.toConnectData(null, header.value());
     }

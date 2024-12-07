@@ -69,7 +69,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogPosition()).isEqualTo(0);
         assertThat(offsetContext.eventsToSkipUponRestart()).isEqualTo(0);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(0);
-        assertThat(offsetContext.isSnapshotRunning()).isFalse();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isFalse();
     }
 
     @Test
@@ -78,7 +78,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(100);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(0);
-        assertThat(offsetContext.isSnapshotRunning()).isFalse();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isFalse();
     }
 
     // -------------------------------------------------------------------------------------
@@ -92,7 +92,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(0);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(0);
-        assertThat(offsetContext.isSnapshotRunning()).isFalse();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isFalse();
     }
 
     @Test
@@ -102,7 +102,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(100);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(0);
-        assertThat(offsetContext.isSnapshotRunning()).isFalse();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isFalse();
     }
 
     @Test
@@ -112,7 +112,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(0);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(5);
-        assertThat(offsetContext.isSnapshotRunning()).isFalse();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isFalse();
     }
 
     @Test
@@ -122,7 +122,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(100);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(5);
-        assertThat(offsetContext.isSnapshotRunning()).isFalse();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isFalse();
     }
 
     @Test
@@ -132,7 +132,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(0);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(0);
-        assertThat(offsetContext.isSnapshotRunning()).isTrue();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isTrue();
     }
 
     @Test
@@ -142,7 +142,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(100);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(0);
-        assertThat(offsetContext.isSnapshotRunning()).isTrue();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isTrue();
     }
 
     @Test
@@ -152,7 +152,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(0);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(5);
-        assertThat(offsetContext.isSnapshotRunning()).isTrue();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isTrue();
     }
 
     @Test
@@ -162,7 +162,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(100);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(5);
-        assertThat(offsetContext.isSnapshotRunning()).isTrue();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isTrue();
     }
 
     @Test
@@ -172,7 +172,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(0);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(0);
-        assertThat(offsetContext.isSnapshotRunning()).isFalse();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isFalse();
     }
 
     @Test
@@ -182,7 +182,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(0);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(5);
-        assertThat(offsetContext.isSnapshotRunning()).isFalse();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isFalse();
     }
 
     @Test
@@ -192,7 +192,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(100);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(0);
-        assertThat(offsetContext.isSnapshotRunning()).isFalse();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isFalse();
     }
 
     @Test
@@ -202,7 +202,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(100);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(5);
-        assertThat(offsetContext.isSnapshotRunning()).isFalse();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isFalse();
     }
 
     @Test
@@ -212,7 +212,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(0);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(0);
-        assertThat(offsetContext.isSnapshotRunning()).isTrue();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isTrue();
     }
 
     @Test
@@ -222,7 +222,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(0);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(5);
-        assertThat(offsetContext.isSnapshotRunning()).isTrue();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isTrue();
     }
 
     @Test
@@ -232,7 +232,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(100);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(0);
-        assertThat(offsetContext.isSnapshotRunning()).isTrue();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isTrue();
     }
 
     @Test
@@ -242,7 +242,7 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
         assertThat(source.binlogFilename()).isEqualTo(FILENAME);
         assertThat(source.binlogPosition()).isEqualTo(100);
         assertThat(offsetContext.rowsToSkipUponRestart()).isEqualTo(5);
-        assertThat(offsetContext.isSnapshotRunning()).isTrue();
+        assertThat(offsetContext.isInitialSnapshotRunning()).isTrue();
     }
 
     // -------------------------------------------------------------------------------------
@@ -659,8 +659,8 @@ public abstract class BinlogSourceInfoTest<S extends BinlogSourceInfo, O extends
                 .field("snapshot", AbstractSourceInfoStructMaker.SNAPSHOT_RECORD_SCHEMA)
                 .field("db", Schema.STRING_SCHEMA)
                 .field("sequence", Schema.OPTIONAL_STRING_SCHEMA)
-                .field("ts_us", Schema.INT64_SCHEMA)
-                .field("ts_ns", Schema.INT64_SCHEMA)
+                .field("ts_us", Schema.OPTIONAL_INT64_SCHEMA)
+                .field("ts_ns", Schema.OPTIONAL_INT64_SCHEMA)
                 .field("table", Schema.OPTIONAL_STRING_SCHEMA)
                 .field("server_id", Schema.INT64_SCHEMA)
                 .field("gtid", Schema.OPTIONAL_STRING_SCHEMA)

@@ -82,6 +82,7 @@ public abstract class CommonConnectorConfig {
     protected final boolean snapshotModeConfigurationBasedSnapshotOnSchemaError;
     protected final boolean snapshotModeConfigurationBasedSnapshotOnDataError;
     protected final boolean isLogPositionCheckEnabled;
+    protected final boolean isAdvancedMetricsEnabled;
 
     /**
      * The set of predefined versions e.g. for source struct maker version
@@ -958,6 +959,16 @@ public abstract class CommonConnectorConfig {
                     + "'warn' (the default) the value of column of event that conversion failed will be null and be logged with warn level; "
                     + "'skip' the value of column of event that conversion failed will be null and be logged with debug level.");
 
+    public static final Field STREAMING_DELAY_MS = Field.create("streaming.delay.ms")
+            .withDisplayName("Streaming Delay (milliseconds)")
+            .withType(Type.LONG)
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 27))
+            .withWidth(Width.MEDIUM)
+            .withImportance(Importance.LOW)
+            .withDescription("A delay period after the snapshot is completed and the streaming begins, given in milliseconds. Defaults to 0 ms.")
+            .withDefault(0L)
+            .withValidation(Field::isNonNegativeLong);
+
     public static final Field SNAPSHOT_LOCKING_MODE_CUSTOM_NAME = Field.create("snapshot.locking.mode.custom.name")
             .withDisplayName("Snapshot Locking Mode Custom Name")
             .withType(Type.STRING)
@@ -1065,6 +1076,16 @@ public abstract class CommonConnectorConfig {
             .optional()
             .withDescription("When enabled the connector checks if the position stored in the offset is still available in the log");
 
+    public static final Field ADVANCED_METRICS_ENABLE = Field.createInternal("advanced.metrics.enable")
+            .withDisplayName("Enable/Disable advance metrics")
+            .withType(Type.BOOLEAN)
+            .withDefault(false)
+            .withGroup(Field.createGroupEntry(Field.Group.ADVANCED, 31))
+            .withWidth(Width.MEDIUM)
+            .withImportance(Importance.MEDIUM)
+            .optional()
+            .withDescription("When enabled the connector will emit advanced streaming metrics");
+
     protected static final ConfigDefinition CONFIG_DEFINITION = ConfigDefinition.editor()
             .connector(
                     EVENT_PROCESSING_FAILURE_HANDLING_MODE,
@@ -1075,6 +1096,7 @@ public abstract class CommonConnectorConfig {
                     PROVIDE_TRANSACTION_METADATA,
                     SKIPPED_OPERATIONS,
                     SNAPSHOT_DELAY_MS,
+                    STREAMING_DELAY_MS,
                     SNAPSHOT_MODE_TABLES,
                     SNAPSHOT_FETCH_SIZE,
                     SNAPSHOT_MAX_THREADS,
@@ -1088,7 +1110,8 @@ public abstract class CommonConnectorConfig {
                     QUERY_FETCH_SIZE,
                     MAX_RETRIES_ON_ERROR,
                     INCREMENTAL_SNAPSHOT_WATERMARKING_STRATEGY,
-                    LOG_POSITION_CHECK_ENABLED)
+                    LOG_POSITION_CHECK_ENABLED,
+                    ADVANCED_METRICS_ENABLE)
             .events(
                     CUSTOM_CONVERTERS,
                     CUSTOM_POST_PROCESSORS,
@@ -1115,6 +1138,7 @@ public abstract class CommonConnectorConfig {
     private final String heartbeatTopicsPrefix;
     private final Duration heartbeatInterval;
     private final Duration snapshotDelay;
+    private final Duration streamingDelay;
     private final Duration retriableRestartWait;
     private final int snapshotFetchSize;
     private final int incrementalSnapshotChunkSize;
@@ -1164,6 +1188,7 @@ public abstract class CommonConnectorConfig {
         this.heartbeatTopicsPrefix = config.getString(Heartbeat.HEARTBEAT_TOPICS_PREFIX);
         this.heartbeatInterval = config.getDuration(Heartbeat.HEARTBEAT_INTERVAL, ChronoUnit.MILLIS);
         this.snapshotDelay = Duration.ofMillis(config.getLong(SNAPSHOT_DELAY_MS));
+        this.streamingDelay = Duration.ofMillis(config.getLong(STREAMING_DELAY_MS));
         this.retriableRestartWait = Duration.ofMillis(config.getLong(RETRIABLE_RESTART_WAIT));
         this.snapshotFetchSize = config.getInteger(SNAPSHOT_FETCH_SIZE, defaultSnapshotFetchSize);
         this.snapshotMaxThreads = config.getInteger(SNAPSHOT_MAX_THREADS);
@@ -1200,6 +1225,7 @@ public abstract class CommonConnectorConfig {
         this.snapshotModeConfigurationBasedSnapshotOnSchemaError = config.getBoolean(SNAPSHOT_MODE_CONFIGURATION_BASED_SNAPSHOT_ON_SCHEMA_ERROR);
         this.snapshotModeConfigurationBasedSnapshotOnDataError = config.getBoolean(SNAPSHOT_MODE_CONFIGURATION_BASED_SNAPSHOT_ON_DATA_ERROR);
         this.isLogPositionCheckEnabled = config.getBoolean(LOG_POSITION_CHECK_ENABLED);
+        this.isAdvancedMetricsEnabled = config.getBoolean(ADVANCED_METRICS_ENABLE);
 
         this.signalingDataCollectionId = !Strings.isNullOrBlank(this.signalingDataCollection)
                 ? TableId.parse(this.signalingDataCollection)
@@ -1293,6 +1319,10 @@ public abstract class CommonConnectorConfig {
 
     public Duration getSnapshotDelay() {
         return snapshotDelay;
+    }
+
+    public Duration getStreamingDelay() {
+        return streamingDelay;
     }
 
     public int getSnapshotFetchSize() {
@@ -1563,6 +1593,10 @@ public abstract class CommonConnectorConfig {
         return isLogPositionCheckEnabled;
     }
 
+    public boolean isAdvancedMetricsEnabled() {
+        return isAdvancedMetricsEnabled;
+    }
+
     public EnumeratedValue snapshotQueryMode() {
         return this.snapshotQueryMode;
     }
@@ -1603,21 +1637,21 @@ public abstract class CommonConnectorConfig {
         return signalEnabledChannels;
     }
 
-    public Optional<String[]> parseSignallingMessage(Struct value) {
-        final Struct after = value.getStruct(Envelope.FieldName.AFTER);
-        if (after == null) {
-            LOGGER.warn("After part of signal '{}' is missing", value);
+    public Optional<String[]> parseSignallingMessage(Struct value, String fieldName) {
+        final Struct event = value.getStruct(fieldName);
+        if (event == null) {
+            LOGGER.warn("Field {} part of signal '{}' is missing", fieldName, value);
             return Optional.empty();
         }
-        List<org.apache.kafka.connect.data.Field> fields = after.schema().fields();
+        List<org.apache.kafka.connect.data.Field> fields = event.schema().fields();
         if (fields.size() != 3) {
-            LOGGER.warn("The signal event '{}' should have 3 fields but has {}", after, fields.size());
+            LOGGER.warn("The signal event '{}' should have 3 fields but has {}", event, fields.size());
             return Optional.empty();
         }
         return Optional.of(new String[]{
-                after.getString(fields.get(0).name()),
-                after.getString(fields.get(1).name()),
-                after.getString(fields.get(2).name())
+                event.getString(fields.get(0).name()),
+                event.getString(fields.get(1).name()),
+                event.getString(fields.get(2).name())
         });
     }
 

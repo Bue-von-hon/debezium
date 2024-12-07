@@ -11,6 +11,9 @@ import java.util.Map;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.debezium.testing.system.tools.ConfigProperties;
+import io.debezium.testing.system.tools.certificateutil.CertUtil;
+import io.debezium.testing.system.tools.databases.mongodb.sharded.OcpMongoCertGenerator;
 import io.strimzi.api.kafka.model.connector.KafkaConnector;
 import io.strimzi.api.kafka.model.connector.KafkaConnectorBuilder;
 
@@ -55,11 +58,13 @@ public class ConnectorConfigBuilder {
         config.put("key.converter.apicurio.registry.url", apicurioUrl);
         config.put("key.converter.apicurio.registry.auto-register", true);
         config.put("key.converter.apicurio.registry.find-latest", true);
+        config.put("key.converter.apicurio.registry.headers.enabled", false);
 
         config.put("value.converter", "io.apicurio.registry.utils.converter.AvroConverter");
         config.put("value.converter.apicurio.registry.url", apicurioUrl);
         config.put("value.converter.apicurio.registry.auto-register", true);
         config.put("value.converter.apicurio.registry.find-latest", true);
+        config.put("value.converter.apicurio.registry.headers.enabled", false);
 
         config.put("schema.name.adjustment.mode", "avro");
 
@@ -117,6 +122,25 @@ public class ConnectorConfigBuilder {
         String serverName = getDbServerName();
         String targetTopicName = serverName + "." + op + "." + tableName;
         return addOperationRouter(op, targetTopicName, serverName + ".*\\." + tableName);
+    }
+
+    public ConnectorConfigBuilder addMongoDbzUser() {
+        if (ConfigProperties.DATABASE_MONGO_USE_TLS) {
+            this
+                    .put("mongodb.ssl.enabled", true)
+                    .put("mongodb.ssl.keystore",
+                            "/opt/kafka/external-configuration/" + OcpMongoCertGenerator.KEYSTORE_CONFIGMAP + "/" + OcpMongoCertGenerator.KEYSTORE_SUBPATH)
+                    .put("mongodb.ssl.keystore.password", CertUtil.KEYSTORE_PASSWORD)
+                    .put("mongodb.ssl.truststore",
+                            "/opt/kafka/external-configuration/" + OcpMongoCertGenerator.TRUSTSTORE_CONFIGMAP + "/" + OcpMongoCertGenerator.TRUSTSTORE_SUBPATH)
+                    .put("mongodb.ssl.truststore.password", CertUtil.KEYSTORE_PASSWORD);
+        }
+        else {
+            this
+                    .put("mongodb.user", ConfigProperties.DATABASE_MONGO_DBZ_USERNAME)
+                    .put("mongodb.password", ConfigProperties.DATABASE_MONGO_DBZ_PASSWORD);
+        }
+        return this;
     }
 
     /**

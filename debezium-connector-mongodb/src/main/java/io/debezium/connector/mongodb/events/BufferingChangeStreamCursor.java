@@ -17,6 +17,9 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.bson.BsonDocument;
 import org.slf4j.Logger;
@@ -56,7 +59,6 @@ public class BufferingChangeStreamCursor<TResult> implements MongoChangeStreamCu
     private final EventFetcher<TResult> fetcher;
     private final ExecutorService executor;
     private final DelayStrategy throttler;
-
     private BsonDocument lastResumeToken = null;
 
     /**
@@ -132,6 +134,9 @@ public class BufferingChangeStreamCursor<TResult> implements MongoChangeStreamCu
         private final MongoDbStreamingChangeEventSourceMetrics metrics;
         private final Clock clock;
         private int noMessageIterations = 0;
+        private final Lock lock = new ReentrantLock();
+        private final Condition resumed = lock.newCondition();
+        private volatile boolean paused;
 
         public EventFetcher(ChangeStreamIterable<TResult> stream,
                             int capacity,
@@ -189,6 +194,40 @@ public class BufferingChangeStreamCursor<TResult> implements MongoChangeStreamCu
             running.set(false);
         }
 
+        public boolean isPaused() {
+            return paused;
+        }
+
+        public void pause() {
+            paused = true;
+            LOGGER.trace("Event buffering will now pause.");
+        }
+
+        public void resume() {
+            lock.lock();
+            try {
+                paused = false;
+                resumed.signalAll();
+                LOGGER.trace("Event buffering will now resume.");
+            }
+            finally {
+                lock.unlock();
+            }
+        }
+
+        public void waitIfPaused() throws InterruptedException {
+            lock.lock();
+            try {
+                while (paused) {
+                    LOGGER.trace("Waiting until buffering is resumed.");
+                    resumed.await();
+                }
+            }
+            finally {
+                lock.unlock();
+            }
+        }
+
         public ResumableChangeStreamEvent<TResult> poll() {
             var event = queue.poll();
             if (event == null) {
@@ -226,6 +265,7 @@ public class BufferingChangeStreamCursor<TResult> implements MongoChangeStreamCu
             }
             catch (InterruptedException e) {
                 LOGGER.error("Fetcher thread interrupted", e);
+                Thread.currentThread().interrupt();
                 throw new DebeziumException("Fetcher thread interrupted", e);
             }
             catch (Throwable e) {
@@ -243,6 +283,9 @@ public class BufferingChangeStreamCursor<TResult> implements MongoChangeStreamCu
             var repeat = false;
             while (isRunning()) {
                 if (!repeat) {
+                    if (paused) {
+                        waitIfPaused();
+                    }
                     var maybeEvent = fetchEvent(cursor);
                     if (maybeEvent.isEmpty()) {
                         LOGGER.warn("Resume token not available on this poll");
@@ -358,13 +401,24 @@ public class BufferingChangeStreamCursor<TResult> implements MongoChangeStreamCu
     private ResumableChangeStreamEvent<TResult> pollWithDelay() {
         boolean slept;
         ResumableChangeStreamEvent<TResult> event;
-
         do {
             event = fetcher.poll();
             slept = throttler.sleepWhen(event == null);
         } while (slept);
 
         return event;
+    }
+
+    public void resume() {
+        fetcher.resume();
+    }
+
+    public void pause() {
+        fetcher.pause();
+    }
+
+    public boolean isPaused() {
+        return fetcher.isPaused();
     }
 
     @Override

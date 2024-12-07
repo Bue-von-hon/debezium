@@ -106,6 +106,7 @@ public abstract class BinlogStreamingChangeEventSource<P extends BinlogPartition
     private static final Logger LOGGER = LoggerFactory.getLogger(BinlogStreamingChangeEventSource.class);
 
     private static final String KEEPALIVE_THREAD_NAME = "blc-keepalive";
+    private static final String SET_STATEMENT_REGEX = "SET STATEMENT .* FOR";
 
     private final BinaryLogClient client;
     private final BinlogStreamingChangeEventSourceMetrics<?, P> metrics;
@@ -252,7 +253,18 @@ public abstract class BinlogStreamingChangeEventSource<P extends BinlogPartition
                 // We've not yet seen any GTIDs, so that means we have to start reading the binlog from the beginning ...
                 client.setBinlogFilename(effectiveOffsetContext.getSource().binlogFilename());
                 client.setBinlogPosition(effectiveOffsetContext.getSource().binlogPosition());
-                initializeGtidSet("");
+                if (purgedServerGtidSet == null || purgedServerGtidSet.isEmpty()) {
+                    LOGGER.info("No GTID stored in the offset, registering binlog reader with empty GTID set.");
+                    client.setGtidSet("");
+                    initializeGtidSet("");
+                }
+                else {
+                    LOGGER.info("No GTID stored in the offset, but there is non-empty purged GTID set. Registering binlog reader with purged GTID set: '{}'",
+                            purgedServerGtidSet.toString());
+                    client.setGtidSet(purgedServerGtidSet.toString());
+                    // We don't have stored any GTID in the offset, so start from empty GTID set.
+                    initializeGtidSet("");
+                }
             }
         }
         else {
@@ -382,6 +394,7 @@ public abstract class BinlogStreamingChangeEventSource<P extends BinlogPartition
                 client.setSslSocketFactory(sslSocketFactory);
             }
         }
+        client.setUseNonGracefulDisconnect(connectorConfig.usesNonGracefulDisconnect());
 
         configureReplicaCompatibility(client);
 
@@ -493,6 +506,7 @@ public abstract class BinlogStreamingChangeEventSource<P extends BinlogPartition
 
     protected void onEvent(O offsetContext, Event event) {
         long ts = 0;
+        totalRecordCounter.incrementAndGet();
 
         if (event.getHeader().getEventType() == EventType.HEARTBEAT) {
             // HEARTBEAT events have no timestamp but are fired only when
@@ -701,7 +715,7 @@ public abstract class BinlogStreamingChangeEventSource<P extends BinlogPartition
             return;
         }
 
-        String upperCasedStatementBegin = Strings.getBegin(sql, 7).toUpperCase();
+        String upperCasedStatementBegin = Strings.getBegin(removeSetStatement(sql), 7).toUpperCase();
 
         if (upperCasedStatementBegin.startsWith("XA ")) {
             // This is an XA transaction, and we currently ignore these and do nothing ...
@@ -748,6 +762,10 @@ public abstract class BinlogStreamingChangeEventSource<P extends BinlogPartition
         catch (InterruptedException e) {
             LOGGER.info("Processing interrupted");
         }
+    }
+
+    private String removeSetStatement(String sql) {
+        return sql.replaceAll(SET_STATEMENT_REGEX, "").trim();
     }
 
     /**
@@ -1213,6 +1231,7 @@ public abstract class BinlogStreamingChangeEventSource<P extends BinlogPartition
             // The event row number will be used when processing the first event ...
             LOGGER.info("Connected to binlog at {}:{}, starting at {}",
                     connectorConfig.getHostName(), connectorConfig.getPort(), offsetContext);
+            totalRecordCounter.set(0);
         }
 
         @Override

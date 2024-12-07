@@ -127,8 +127,8 @@ public class SqlServerStreamingChangeEventSource implements StreamingChangeEvent
     }
 
     @Override
-    public void init(SqlServerOffsetContext offsetContext) throws InterruptedException {
-        this.effectiveOffset = offsetContext == null ? new SqlServerOffsetContext(connectorConfig, TxLogPosition.NULL, false, false) : offsetContext;
+    public void init(SqlServerOffsetContext offsetContext) {
+        this.effectiveOffset = offsetContext == null ? new SqlServerOffsetContext(connectorConfig, TxLogPosition.NULL, null, false) : offsetContext;
     }
 
     @Override
@@ -369,8 +369,10 @@ public class SqlServerStreamingChangeEventSource implements StreamingChangeEvent
     private void collectChangeTablesWithKnownStopLsn(SqlServerPartition partition, SqlServerChangeTable[] tables) {
         for (SqlServerChangeTable table : tables) {
             if (table.getStopLsn().isAvailable()) {
-                LOGGER.info("The stop lsn of {} change table became known", table);
-                changeTablesWithKnownStopLsn.computeIfAbsent(partition, x -> new HashSet<>()).add(table);
+                synchronized (changeTablesWithKnownStopLsn) {
+                    LOGGER.info("The stop lsn of {} change table became known", table);
+                    changeTablesWithKnownStopLsn.computeIfAbsent(partition, x -> new HashSet<>()).add(table);
+                }
             }
         }
     }

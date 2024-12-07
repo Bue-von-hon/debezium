@@ -11,6 +11,8 @@
 :connector-class: InformixConnector
 :connector-name: Informix
 :include-list-example: public.inventory
+:collection-container:  database.schema
+
 ifdef::community[]
 
 :toc:
@@ -378,6 +380,12 @@ The {prodname} connector for Informix does not support schema changes while an i
 ==== Triggering an incremental snapshot
 
 include::{partialsdir}/modules/all-connectors/proc-triggering-an-incremental-snapshot-sql.adoc[leveloffset=+1]
+
+[id="informix-incremental-snapshots-additional-conditions"]
+==== Running an ad hoc incremental snapshots with `additional-conditions`
+
+include::{partialsdir}/modules/all-connectors/proc-running-an-ad-hoc-snapshot-with-additional-conditions.adoc[leveloffset=+1]
+
 
 // Type: procedure
 // ModuleID: debezium-informix-using-the-kafka-signaling-channel-to-trigger-an-incremental-snapshot
@@ -1599,12 +1607,13 @@ To populate values in these fields from the source columns, the connector uses a
 The connector provides default mappings for the following Informix data types:
 
 * xref:informix-basic-types[Basic types]
-* xref:informix-temportal-types[Temporal types]
+* xref:informix-temporal-types[Temporal types]
 * xref:informix-timestamp-types[Timestamp types]
 * xref:informix-decimal-types[Decimal types]
+
 If the default data type conversions do not meet your needs, you can {link-prefix}:{link-custom-converters}#custom-converters[create a custom converter] for the connector.
 
-[id="informix-basic-types"]
+[[informix-basic-types]]
 === Basic types
 
 The following table describes how the connector maps each Informix data type to a _literal type_ and a _semantic type_ in event fields.
@@ -1778,6 +1787,9 @@ Represents the number of milliseconds since the epoch, and does not include time
 
 |===
 
+.INTERVAL
+The `INTERVAL` type is not supported by the Informix Change Stream client.
+
 [[informix-timestamp-types]]
 === Timestamp types
 
@@ -1804,7 +1816,7 @@ The `connect.decimal.precision` schema parameter contains an integer that repres
 |`DECIMAL[(P[,S])]`
 |`BYTES`
 |`org.apache.kafka.connect.data.Decimal` +
-+
+ +
 The `scale` schema parameter contains an integer that represents how many digits the decimal point is shifted.
 The `connect.decimal.precision` schema parameter contains an integer that represents the precision of the given decimal value.
 
@@ -1955,8 +1967,13 @@ Information about the properties is organized as follows:
 * xref:informix-required-configuration-properties[Required configuration properties]
 * xref:informix-advanced-configuration-properties[Advanced configuration properties]
 * xref:debezium-informix-connector-database-history-configuration-properties[Database schema history connector configuration properties] that control how {prodname} processes events that it reads from the database schema history topic.
-** xref:debezium-informix-connector-pass-through-database-driver-configuration-properties[Pass-through database schema history properties]
-* xref:debezium-informix-connector-pass-through-database-driver-configuration-properties[Pass-through database driver properties] that control the behavior of the database driver.
+* xref:debezium-informix-connector-pass-through-properties[Pass-through Informix connector configuration properties]
+** xref:debezium-informix-pass-through-database-history-properties-for-configuring-producer-and-consumer-clients[Pass-through database schema history properties for configuring producer and consumer clients]
+** xref:debezium-informix-connector-pass-through-kafka-signals-configuration-properties[Pass-through Kafka signals configuration properties]
+** xref:debezium-informix-connector-pass-through-signals-kafka-consumer-client-configuration-properties[Pass-through Kafka signals consumer client configuration properties]
+** xref:debezium-informix-connector-pass-through-kafka-sink-notification-configuration-properties[Pass-through sink notification configuration properties]
+** xref:debezium-informix-connector-pass-through-database-driver-configuration-properties[Pass-through database driver configuration properties]
+
 
 
 [id="informix-required-configuration-properties"]
@@ -2469,6 +2486,12 @@ Enable the connector to send heartbeat messages to ensure that it sends the late
 |An interval in milliseconds that the connector should wait before performing a snapshot when the connector starts.
 If you start multiple connectors in a cluster, this property is useful for avoiding snapshot interruptions, which might cause re-balancing of connectors.
 
+|[[informix-property-streaming-delay-ms]]<<informix-property-streaming-delay-ms, `+streaming.delay.ms+`>>
+|0
+|Specifies the time, in milliseconds, that the connector delays the start of the streaming process after it completes a snapshot.
+Setting a delay interval helps to prevent the connector from restarting snapshots in the event that a failure occurs immediately after the snapshot completes, but before the streaming process begins.
+Set a delay value that is higher than the value of the {link-kafka-docs}/#connectconfigs_offset.flush.interval.ms[`offset.flush.interval.ms`] property that is set for the Kafka Connect worker.
+
 |[[informix-property-snapshot-include-collection-list]]<<informix-property-snapshot-include-collection-list, `+snapshot.include.collection.list+`>>
 | All tables specified in `table.include.list`
 |An optional, comma-separated list of regular expressions that match the fully-qualified names (`_databaseName_._schemaName_._tableName_`) of the tables to include in a snapshot.
@@ -2523,7 +2546,7 @@ From a `customers.orders` table that includes the soft-delete column, `delete_fl
 
 ----
 "snapshot.select.statement.overrides": "mydatabase.customer.orders",
-"snapshot.select.statement.overrides.mydatabase.customer.orders": "SELECT * FROM [customers].[orders] WHERE delete_flag = 0 ORDER BY id DESC"
+"snapshot.select.statement.overrides.mydatabase.customer.orders": "SELECT * FROM customers.orders WHERE delete_flag = 0 ORDER BY id DESC"
 ----
 
 In the resulting snapshot, the connector includes only the records for which `delete_flag = 0`.
@@ -2635,18 +2658,24 @@ endif::community[]
 
 |[[informix-property-custom-metric-tags]]<<informix-property-custom-metric-tags, `custom.metric.tags`>>
 |`No default`
-|Defines tags for customizing MBean object names by adding metadata that provides contextual information that enables you to organize and categorize metrics data.
+|Defines tags that customize MBean object names by adding metadata that provides contextual information.
 Specify a comma-separated list of key-value pairs.
 Each key represents a tag for the MBean object name, and the corresponding value represents a value for the key, for example,  +
 `k1=v1,k2=v2`
 
 The connector appends the specified tags to the base MBean object name.
-
+Tags can help you to organize and categorize metrics data.
 You can define tags to identify particular application instances, environments, regions, versions, and so forth.
+For more information, see xref:customized-mbean-names[Customized MBean names].
 
 |[[informix-property-errors-max-retires]]<<informix-property-errors-max-retires, `errors.max.retries`>>
 |`-1`
 |The maximum number of retries on retriable errors (e.g. connection errors) before failing (-1 = no limit, 0 = disabled, > 0 = num of retries).
+
+|[[informix-property-database-query-timeout-ms]]<<informix-property-database-query-timeout-ms, `database.query.timeout.ms`>>
+|`600000` (10 minutes)
+|Specifies the time, in milliseconds, that the connector waits for a query to complete.
+Set the value to `0` (zero) to remove the timeout limit.
 
 |===
 
@@ -2655,20 +2684,42 @@ You can define tags to identify particular application instances, environments, 
 
 include::{partialsdir}/modules/all-connectors/ref-connector-configuration-database-history-properties.adoc[leveloffset=+1]
 
-[id="debezium-{context}-connector-kafka-signals-configuration-properties"]
-==== {prodname} connector Kafka signals configuration properties
+
+[id="debezium-informix-connector-pass-through-properties"]
+==== Pass-through Informix connector configuration properties
+
+The connector supports _pass-through_ properties that enable {prodname} to specify custom configuration options for fine-tuning the behavior of the Apache Kafka producer and consumer.
+For information about the full range of configuration properties for Kafka producers and consumers, see the {link-kafka-docs}/#configuration[Kafka documentation].
+
+[id="debezium-informix-pass-through-database-history-properties-for-configuring-producer-and-consumer-clients"]
+===== Pass-through properties for configuring how producer and consumer clients interact with schema history topics
+
+include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-database-history-properties-for-configuring-producer-and-consumer-clients.adoc[leveloffset=+1]
+
+
+[id="debezium-informix-connector-pass-through-kafka-signals-configuration-properties"]
+===== Pass-through properties for configuring how the Informix connector interacts with the Kafka signaling topic
 
 include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-kafka-signals-configuration-properties.adoc[leveloffset=+1]
 
-[id="debezium-{context}-connector-kafka-notifications-configuration-properties"]
-==== {prodname} connector sink notifications configuration properties
 
-include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-kafka-notification-configuration-properties.adoc[leveloffset=+1]
+[id="debezium-informix-connector-pass-through-signals-kafka-consumer-client-configuration-properties"]
+===== Pass-through properties for configuring the Kafka consumer client for the signaling channel
+
+include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-signals-kafka-consumer-client-configuration-properties.adoc[leveloffset=+1]
+
+
+[id="debezium-informix-connector-pass-through-kafka-sink-notification-configuration-properties"]
+===== Pass-through properties for configuring the Informix connector sink notification channel
+
+include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-kafka-sink-notification-configuration-properties.adoc[leveloffset=+1]
+
 
 [id="debezium-informix-connector-pass-through-database-driver-configuration-properties"]
-==== {prodname} connector pass-through database driver configuration properties
+===== {prodname} connector pass-through database driver configuration properties
 
 include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-database-driver-configuration-properties.adoc[leveloffset=+1]
+
 
 // Type: assembly
 // ModuleID: monitoring-debezium-informix-connector-performance
@@ -2683,6 +2734,13 @@ The {prodname} Informix connector provides three types of metrics that are in ad
 * xref:informix-schema-history-metrics[Schema history metrics] provide information about the status of the connector's schema history.
 
 {link-prefix}:{link-debezium-monitoring}#monitoring-debezium[{prodname} monitoring documentation] provides details for how to expose these metrics by using JMX.
+
+// Type: concept
+// ModuleID: monitoring-debezium-informix-connectors-customized-mbean-names
+// Title: Customized names for Informix connector snapshot and streaming MBean objects
+=== Customized MBean names
+
+include::{partialsdir}/modules/all-connectors/frag-common-mbean-name.adoc[leveloffset=+1,tags=mbeans-shared]
 
 // Type: reference
 // ModuleID: monitoring-debezium-during-snapshots-of-informix-databases

@@ -21,12 +21,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.connect.connector.Task;
 import org.apache.kafka.connect.file.FileStreamSourceConnector;
 import org.apache.kafka.connect.runtime.ConnectorConfig;
 import org.apache.kafka.connect.runtime.WorkerConfig;
 import org.apache.kafka.connect.runtime.standalone.StandaloneConfig;
 import org.apache.kafka.connect.source.SourceRecord;
+import org.apache.kafka.connect.transforms.Transformation;
 import org.awaitility.Awaitility;
 import org.awaitility.core.ConditionTimeoutException;
 import org.junit.Before;
@@ -38,9 +40,16 @@ import io.debezium.DebeziumException;
 import io.debezium.connector.simple.SimpleSourceConnector;
 import io.debezium.doc.FixFor;
 import io.debezium.embedded.AbstractConnectorTest;
+import io.debezium.embedded.Connect;
+import io.debezium.embedded.ConvertingEngineBuilder;
 import io.debezium.embedded.DebeziumEngineTestUtils;
+import io.debezium.embedded.EmbeddedEngineChangeEvent;
 import io.debezium.embedded.EmbeddedEngineConfig;
+import io.debezium.embedded.EmbeddedEngineHeader;
+import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
+import io.debezium.engine.format.Json;
+import io.debezium.engine.format.KeyValueHeaderChangeEventFormat;
 import io.debezium.junit.logging.LogInterceptor;
 import io.debezium.util.LoggingContext;
 import io.debezium.util.Testing;
@@ -93,7 +102,7 @@ public class AsyncEmbeddedEngineTest {
         CountDownLatch snapshotLatch = new CountDownLatch(1);
         CountDownLatch allLatch = new CountDownLatch(6);
 
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .using(new TestEngineConnectorCallback())
@@ -143,7 +152,7 @@ public class AsyncEmbeddedEngineTest {
         props.put(SimpleSourceConnector.BATCH_COUNT, 1);
 
         final AtomicInteger recordsRead = new AtomicInteger(0);
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .notifying((records, committer) -> {
@@ -182,7 +191,7 @@ public class AsyncEmbeddedEngineTest {
         props.put(AsyncEngineConfig.TASK_MANAGEMENT_TIMEOUT_MS, "10");
 
         final AtomicInteger recordsRead = new AtomicInteger(0);
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .using(new TestEngineConnectorCallback())
@@ -218,6 +227,47 @@ public class AsyncEmbeddedEngineTest {
     }
 
     @Test
+    public void testHeaderConverter() throws Exception {
+        final Properties props = new Properties();
+        props.setProperty(ConnectorConfig.NAME_CONFIG, "debezium-engine");
+        props.setProperty(ConnectorConfig.TASKS_MAX_CONFIG, "1");
+        props.setProperty(ConnectorConfig.CONNECTOR_CLASS_CONFIG, FileStreamSourceConnector.class.getName());
+        props.setProperty(StandaloneConfig.OFFSET_STORAGE_FILE_FILENAME_CONFIG, OFFSET_STORE_PATH.toAbsolutePath().toString());
+        props.setProperty(WorkerConfig.OFFSET_COMMIT_INTERVAL_MS_CONFIG, "0");
+        props.setProperty(FileStreamSourceConnector.FILE_CONFIG, TEST_FILE_PATH.toAbsolutePath().toString());
+        props.setProperty(FileStreamSourceConnector.TOPIC_CONFIG, "testTopic");
+        props.setProperty("transforms", "header");
+        props.setProperty("transforms.header.type", "io.debezium.embedded.async.FixedValueHeader");
+
+        appendLinesToSource(1);
+        CountDownLatch recordsLatch = new CountDownLatch(1); // 1 count down for headers
+
+        DebeziumEngine.Builder<EmbeddedEngineChangeEvent> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>(
+                KeyValueHeaderChangeEventFormat.of(Json.class, Json.class, Json.class));
+        DebeziumEngine<EmbeddedEngineChangeEvent> embeddedEngine = builder
+                .using(props)
+                .using(new TestEngineConnectorCallback())
+                .notifying((records, committer) -> {
+                    for (EmbeddedEngineChangeEvent r : records) {
+                        committer.markProcessed(r);
+                        assertThat(r.headers().size()).isEqualTo(1);
+                        assertThat(
+                                ((EmbeddedEngineHeader) r.headers().get(0)).getValue()).isEqualTo("{\"schema\":{\"type\":\"int32\",\"optional\":false},\"payload\":2}");
+                    }
+                    committer.markBatchFinished();
+                }).build();
+
+        engineExecSrv.submit(() -> {
+            LoggingContext.forConnector(getClass().getSimpleName(), "", "engine");
+            embeddedEngine.run();
+        });
+
+        recordsLatch.await(AbstractConnectorTest.waitTimeForEngine(), TimeUnit.SECONDS);
+
+        embeddedEngine.close();
+    }
+
+    @Test
     public void testCompletionCallbackCalledUponSuccess() throws Exception {
         final Properties props = new Properties();
         props.setProperty(ConnectorConfig.NAME_CONFIG, "debezium-engine");
@@ -234,7 +284,7 @@ public class AsyncEmbeddedEngineTest {
         CountDownLatch callbackLatch = new CountDownLatch(1);
         AtomicInteger recordsSent = new AtomicInteger();
 
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .using(new TestEngineConnectorCallback())
@@ -279,7 +329,7 @@ public class AsyncEmbeddedEngineTest {
 
         CountDownLatch callbackLatch = new CountDownLatch(1);
 
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .using(new TestEngineConnectorCallback())
@@ -303,6 +353,66 @@ public class AsyncEmbeddedEngineTest {
     }
 
     @Test
+    @FixFor("DBZ-8414")
+    public void testErrorInConnectorCallbackDoesNotBlockShutdown() throws Exception {
+        final Properties props = new Properties();
+        props.put(ConnectorConfig.NAME_CONFIG, "debezium-engine");
+        props.put(ConnectorConfig.TASKS_MAX_CONFIG, "1");
+        props.put(ConnectorConfig.CONNECTOR_CLASS_CONFIG, FileStreamSourceConnector.class.getName());
+        props.put(StandaloneConfig.OFFSET_STORAGE_FILE_FILENAME_CONFIG, OFFSET_STORE_PATH.toAbsolutePath().toString());
+        props.put(WorkerConfig.OFFSET_COMMIT_INTERVAL_MS_CONFIG, "0");
+        props.put(FileStreamSourceConnector.FILE_CONFIG, TEST_FILE_PATH.toAbsolutePath().toString());
+        props.put(FileStreamSourceConnector.TOPIC_CONFIG, "testTopic");
+
+        appendLinesToSource(NUMBER_OF_LINES);
+        AtomicInteger recordsSent = new AtomicInteger();
+        CountDownLatch recordsLatch = new CountDownLatch(1);
+
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
+        engine = builder
+                .using(props)
+                .using(new TestEngineConnectorCallback() {
+                    @Override
+                    public void connectorStopped() {
+                        super.connectorStopped();
+                        throw new RuntimeException("User connector callback exception, enjoy");
+                    }
+                })
+                .notifying((records, committer) -> {
+                    for (SourceRecord r : records) {
+                        committer.markProcessed(r);
+                        recordsSent.getAndIncrement();
+                    }
+                    committer.markBatchFinished();
+                    recordsLatch.countDown();
+                }).build();
+
+        // Start engine and make sure it's running.
+        engineExecSrv.submit(() -> {
+            LoggingContext.forConnector(getClass().getSimpleName(), "", "engine");
+            engine.run();
+        });
+        recordsLatch.await(AbstractConnectorTest.waitTimeForEngine(), TimeUnit.SECONDS);
+        assertThat(recordsSent.get()).isEqualTo(NUMBER_OF_LINES);
+
+        // Stop engine in another thread to avoid blocking the main thread if it gets stuck.
+        CountDownLatch shutdownLatch = new CountDownLatch(1);
+        Executors.newSingleThreadExecutor().submit(() -> {
+            try {
+                engine.close();
+                shutdownLatch.countDown();
+            }
+            catch (IOException e) {
+                // pass
+            }
+        });
+
+        // Assert that latch was counted down, i.e. closing the engine hasn't blocked forever.
+        shutdownLatch.await(1, TimeUnit.SECONDS);
+        assertThat(shutdownLatch.getCount()).isEqualTo(0);
+    }
+
+    @Test
     @FixFor("DBZ-2534")
     public void testCannotStopWhileTasksAreStarting() throws Exception {
         final Properties props = new Properties();
@@ -316,7 +426,7 @@ public class AsyncEmbeddedEngineTest {
         CountDownLatch taskStartingLatch = new CountDownLatch(1);
         CountDownLatch enginStopLatch = new CountDownLatch(1);
 
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .using(new TestEngineConnectorCallback())
@@ -357,7 +467,7 @@ public class AsyncEmbeddedEngineTest {
         props.put(SimpleSourceConnector.BATCH_COUNT, 1);
         props.put(AsyncEngineConfig.TASK_MANAGEMENT_TIMEOUT_MS, "10");
 
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .using(new TestEngineConnectorCallback())
@@ -410,7 +520,7 @@ public class AsyncEmbeddedEngineTest {
         // We have only 5 groups as the first one is filtered out (first records is filtered out and therefore group not counted)
         CountDownLatch allLatch = new CountDownLatch(5);
 
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .using(new TestEngineConnectorCallback())
@@ -452,6 +562,46 @@ public class AsyncEmbeddedEngineTest {
     }
 
     @Test
+    @FixFor("DBZ-8106")
+    public void testCloseSmt() throws Exception {
+        final Properties props = new Properties();
+        props.setProperty(ConnectorConfig.NAME_CONFIG, "debezium-engine");
+        props.setProperty(ConnectorConfig.TASKS_MAX_CONFIG, "1");
+        props.setProperty(ConnectorConfig.CONNECTOR_CLASS_CONFIG, FileStreamSourceConnector.class.getName());
+        props.setProperty(StandaloneConfig.OFFSET_STORAGE_FILE_FILENAME_CONFIG, OFFSET_STORE_PATH.toAbsolutePath().toString());
+        props.setProperty(WorkerConfig.OFFSET_COMMIT_INTERVAL_MS_CONFIG, "0");
+        props.setProperty(FileStreamSourceConnector.FILE_CONFIG, TEST_FILE_PATH.toAbsolutePath().toString());
+        props.setProperty(FileStreamSourceConnector.TOPIC_CONFIG, "testTopic");
+        props.setProperty("transforms", "close");
+        props.setProperty("transforms.close.type", "io.debezium.embedded.async.AsyncEmbeddedEngineTest$CloseTestTransform");
+
+        CountDownLatch callbackLatch = new CountDownLatch(1);
+
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
+        engine = builder
+                .using(props)
+                .using(new TestEngineConnectorCallback())
+                .using((success, message, error) -> {
+                    if (success) {
+                        callbackLatch.countDown();
+                    }
+                })
+                .notifying((records, committer) -> {
+                })
+                .build();
+
+        engineExecSrv.submit(() -> {
+            LoggingContext.forConnector(getClass().getSimpleName(), "", "engine");
+            engine.run();
+        });
+
+        callbackLatch.await(AbstractConnectorTest.waitTimeForEngine(), TimeUnit.SECONDS);
+        stopEngine();
+
+        assertThat(CloseTestTransform.wasClosed).isTrue();
+    }
+
+    @Test
     public void testPollingIsRetriedUponFailure() throws Exception {
         final Properties props = new Properties();
         props.setProperty(ConnectorConfig.NAME_CONFIG, "debezium-engine");
@@ -463,7 +613,7 @@ public class AsyncEmbeddedEngineTest {
 
         CountDownLatch recordsLatch = new CountDownLatch(SimpleSourceConnector.DEFAULT_BATCH_COUNT);
 
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .using(new TestEngineConnectorCallback())
@@ -499,7 +649,7 @@ public class AsyncEmbeddedEngineTest {
         CountDownLatch recordsLatch = new CountDownLatch(SimpleSourceConnector.DEFAULT_BATCH_COUNT);
         final LogInterceptor interceptor = new LogInterceptor(AsyncEmbeddedEngine.class);
 
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .using(new TestEngineConnectorCallback())
@@ -577,7 +727,7 @@ public class AsyncEmbeddedEngineTest {
         AtomicInteger recordsSent = new AtomicInteger();
         AtomicBoolean connectorCallbackCalled = new AtomicBoolean(false);
 
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .using((success, message, error) -> {
@@ -626,6 +776,141 @@ public class AsyncEmbeddedEngineTest {
         assertThat(connectorCallbackCalled.get()).isTrue();
     }
 
+    @Test
+    @FixFor("DBZ-8241")
+    public void testDefaultBuilderFactory() throws Exception {
+        final Properties props = new Properties();
+        props.setProperty(ConnectorConfig.NAME_CONFIG, "debezium-engine");
+        props.setProperty(ConnectorConfig.TASKS_MAX_CONFIG, "1");
+        props.setProperty(ConnectorConfig.CONNECTOR_CLASS_CONFIG, FileStreamSourceConnector.class.getName());
+        props.setProperty(StandaloneConfig.OFFSET_STORAGE_FILE_FILENAME_CONFIG, OFFSET_STORE_PATH.toAbsolutePath().toString());
+        props.setProperty(WorkerConfig.OFFSET_COMMIT_INTERVAL_MS_CONFIG, "0");
+        props.setProperty(FileStreamSourceConnector.FILE_CONFIG, TEST_FILE_PATH.toAbsolutePath().toString());
+        props.setProperty(FileStreamSourceConnector.TOPIC_CONFIG, "testTopic");
+
+        DebeziumEngine.Builder<ChangeEvent<SourceRecord, SourceRecord>> builder = DebeziumEngine.create(Connect.class);
+
+        // Until EmbeddedEngine is removed, the default is EmbeddedEngine.
+        assertThat(builder).isInstanceOf(ConvertingEngineBuilder.class);
+
+        // Verify that engine created by default builder factory works.
+        appendLinesToSource(NUMBER_OF_LINES);
+        CountDownLatch recordsLatch = new CountDownLatch(NUMBER_OF_LINES);
+
+        DebeziumEngine<ChangeEvent<SourceRecord, SourceRecord>> engine = builder
+                .using(props)
+                .using(new TestEngineConnectorCallback())
+                .notifying((records, committer) -> {
+                    assertThat(records.size()).isGreaterThanOrEqualTo(NUMBER_OF_LINES);
+                    for (int i = 0; i < records.size(); i++) {
+                        assertThat(records.get(i).value()).isInstanceOf(SourceRecord.class);
+                        recordsLatch.countDown();
+                    }
+                    committer.markBatchFinished();
+                }).build();
+
+        engineExecSrv.submit(() -> {
+            LoggingContext.forConnector(getClass().getSimpleName(), "", "engine");
+            engine.run();
+        });
+
+        recordsLatch.await(AbstractConnectorTest.waitTimeForEngine(), TimeUnit.SECONDS);
+        assertThat(recordsLatch.getCount()).isEqualTo(0);
+
+        engine.close();
+    }
+
+    @Test
+    @FixFor("DBZ-8434")
+    public void testSmtReturnsNullToProcessor() throws Exception {
+        final Properties props = new Properties();
+        props.setProperty(ConnectorConfig.NAME_CONFIG, "debezium-engine");
+        props.setProperty(ConnectorConfig.TASKS_MAX_CONFIG, "1");
+        props.setProperty(ConnectorConfig.CONNECTOR_CLASS_CONFIG, FileStreamSourceConnector.class.getName());
+        props.setProperty(StandaloneConfig.OFFSET_STORAGE_FILE_FILENAME_CONFIG, OFFSET_STORE_PATH.toAbsolutePath().toString());
+        props.setProperty(WorkerConfig.OFFSET_COMMIT_INTERVAL_MS_CONFIG, "0");
+        props.setProperty(FileStreamSourceConnector.FILE_CONFIG, TEST_FILE_PATH.toAbsolutePath().toString());
+        props.setProperty(FileStreamSourceConnector.TOPIC_CONFIG, "testTopic");
+        props.setProperty("transforms", "null");
+        props.setProperty("transforms.null.type", "io.debezium.embedded.async.AsyncEmbeddedEngineTest$OddIsNullTransform");
+
+        final int numRecords = NUMBER_OF_LINES / 2;
+        CountDownLatch recordsLatch = new CountDownLatch(numRecords);
+        AtomicBoolean receivedNull = new AtomicBoolean(false);
+
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
+        engine = builder
+                .using(props)
+                .using(new TestEngineConnectorCallback())
+                .notifying(record -> {
+                    if (record == null) {
+                        receivedNull.set(true);
+                    }
+                    else {
+                        recordsLatch.countDown();
+                    }
+                })
+                .build();
+
+        engineExecSrv.submit(() -> {
+            LoggingContext.forConnector(getClass().getSimpleName(), "", "engine");
+            engine.run();
+        });
+        appendLinesToSource(numRecords * 2);
+
+        recordsLatch.await(AbstractConnectorTest.waitTimeForEngine(), TimeUnit.SECONDS);
+        stopEngine();
+
+        assertThat(recordsLatch.getCount()).isEqualTo(0);
+        assertThat(receivedNull.get()).isFalse();
+    }
+
+    @Test
+    @FixFor("DBZ-8434")
+    public void testSmtReturnsNullToProcessorAndConvertor() throws Exception {
+        final Properties props = new Properties();
+        props.setProperty(ConnectorConfig.NAME_CONFIG, "debezium-engine");
+        props.setProperty(ConnectorConfig.TASKS_MAX_CONFIG, "1");
+        props.setProperty(ConnectorConfig.CONNECTOR_CLASS_CONFIG, FileStreamSourceConnector.class.getName());
+        props.setProperty(StandaloneConfig.OFFSET_STORAGE_FILE_FILENAME_CONFIG, OFFSET_STORE_PATH.toAbsolutePath().toString());
+        props.setProperty(WorkerConfig.OFFSET_COMMIT_INTERVAL_MS_CONFIG, "0");
+        props.setProperty(FileStreamSourceConnector.FILE_CONFIG, TEST_FILE_PATH.toAbsolutePath().toString());
+        props.setProperty(FileStreamSourceConnector.TOPIC_CONFIG, "testTopic");
+        props.setProperty("transforms", "null");
+        props.setProperty("transforms.null.type", "io.debezium.embedded.async.AsyncEmbeddedEngineTest$OddIsNullTransform");
+
+        final int numRecords = NUMBER_OF_LINES / 2;
+        CountDownLatch recordsLatch = new CountDownLatch(numRecords);
+        AtomicBoolean receivedNull = new AtomicBoolean(false);
+
+        DebeziumEngine.Builder<EmbeddedEngineChangeEvent> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>(
+                KeyValueHeaderChangeEventFormat.of(Json.class, Json.class, Json.class));
+        DebeziumEngine<EmbeddedEngineChangeEvent> embeddedEngine = builder
+                .using(props)
+                .using(new TestEngineConnectorCallback())
+                .notifying(record -> {
+                    if (record == null) {
+                        receivedNull.set(true);
+                    }
+                    else {
+                        recordsLatch.countDown();
+                    }
+                })
+                .build();
+
+        engineExecSrv.submit(() -> {
+            LoggingContext.forConnector(getClass().getSimpleName(), "", "engine");
+            embeddedEngine.run();
+        });
+        appendLinesToSource(numRecords * 2);
+
+        recordsLatch.await(AbstractConnectorTest.waitTimeForEngine(), TimeUnit.SECONDS);
+        embeddedEngine.close();
+
+        assertThat(recordsLatch.getCount()).isEqualTo(0);
+        assertThat(receivedNull.get()).isFalse();
+    }
+
     private void runEngineBasicLifecycleWithConsumer(final Properties props) throws IOException, InterruptedException {
 
         final LogInterceptor interceptor = new LogInterceptor(AsyncEmbeddedEngine.class);
@@ -634,7 +919,7 @@ public class AsyncEmbeddedEngineTest {
         appendLinesToSource(NUMBER_OF_LINES);
         CountDownLatch allLatch = new CountDownLatch(6 * NUMBER_OF_LINES);
 
-        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder();
+        DebeziumEngine.Builder<SourceRecord> builder = new AsyncEmbeddedEngine.AsyncEngineBuilder<>();
         engine = builder
                 .using(props)
                 .using(new TestEngineConnectorCallback())
@@ -756,4 +1041,56 @@ public class AsyncEmbeddedEngineTest {
         }
     }
 
+    public static class CloseTestTransform implements Transformation<SourceRecord> {
+
+        public static boolean wasClosed;
+
+        @Override
+        public SourceRecord apply(SourceRecord record) {
+            // Nothing to do.
+            return null;
+        }
+
+        @Override
+        public ConfigDef config() {
+            // Nothing to do.
+            return null;
+        }
+
+        @Override
+        public void close() {
+            wasClosed = true;
+        }
+
+        @Override
+        public void configure(Map<String, ?> map) {
+            wasClosed = false;
+        }
+    }
+
+    public static class OddIsNullTransform implements Transformation<SourceRecord> {
+
+        public static int counter = 0;
+
+        @Override
+        public SourceRecord apply(SourceRecord record) {
+            return (++counter % 2 == 0) ? record : null;
+        }
+
+        @Override
+        public ConfigDef config() {
+            // Nothing to do.
+            return null;
+        }
+
+        @Override
+        public void close() {
+            // Nothing to do.
+        }
+
+        @Override
+        public void configure(Map<String, ?> map) {
+            // Nothing to do.
+        }
+    }
 }

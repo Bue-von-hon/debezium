@@ -217,6 +217,14 @@ ENGINE=InnoDB DEFAULT CHARSET=UTF8MB4 COLLATE=UTF8MB4_GENERAL_CI;
 CREATE TABLE `test_table\\`(id INT(11) NOT NULL, PRIMARY KEY (`id`)) ENGINE = INNODB;
 CREATE TABLE `\\test_table`(id INT(11) NOT NULL, PRIMARY KEY (`id`)) ENGINE = INNODB;
 CREATE TABLE `\\test\\_table\\`(id INT(11) NOT NULL, PRIMARY KEY (`id`)) ENGINE = INNODB;
+
+CREATE TABLE TableWithVector (id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, vec1 VECTOR, vec2 VECTOR);
+
+CREATE TABLE PARTICIPATE_ACTIVITIES (
+    ID BIGINT NOT NULL AUTO_INCREMENT,
+    USER_ID BIGINT NOT NULL,
+    PRIMARY KEY (ID) USING BTREE)
+ENGINE=INNODB AUTO_INCREMENT=1979503 DEFAULT CHARSET=UTF8MB4 COLLATE=UTF8MB4_GENERAL_CI SECONDARY_ENGINE=RAPID;
 #end
 #begin
 -- Rename table
@@ -345,6 +353,11 @@ END
 -- Create trigger 6
 -- delimiter //
 create or replace trigger trg_my1 before delete on test.t1 for each row begin insert into log_table values ("delete row from test.t1"); insert into t4 values (old.col1, old.col1 + 5, old.col1 + 7); end; -- //-- delimiter ;
+#end
+#begin
+-- Create trigger 7
+-- delimiter //
+CREATE TRIGGER IF NOT EXISTS `my_trigger` BEFORE INSERT ON `my_table` FOR EACH ROW BEGIN SET NEW.my_col = CONCAT(NEW.mycol, NEW.id); END; -- //-- delimiter ;
 #end
 #begin
 -- Create view

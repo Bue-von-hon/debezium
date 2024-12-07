@@ -3,7 +3,7 @@
     <parent>
         <groupId>io.debezium</groupId>
         <artifactId>debezium-parent</artifactId>
-        <version>2.7.0-SNAPSHOT</version>
+        <version>3.0.5-SNAPSHOT</version>
         <relativePath>../debezium-parent/pom.xml</relativePath>
     </parent>
     <modelVersion>4.0.0</modelVersion>
@@ -29,18 +29,6 @@
                 <exclusion>
                     <groupId>org.slf4j</groupId>
                     <artifactId>jcl-over-slf4j</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
-        <!-- Remove - exists only for access to CharsetMapping tidbits -->
-        <dependency>
-            <groupId>com.mysql</groupId>
-            <artifactId>mysql-connector-j</artifactId>
-            <exclusions>
-                <exclusion>
-                    <groupId>com.google.protobuf</groupId>
-                    <artifactId>protobuf-java</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>
@@ -158,7 +146,7 @@
         Specify the properties for the various Docker containers.
         -->
         <mariadb.server.image.source>mariadb</mariadb.server.image.source>
-        <version.mariadb.server>11.1.2</version.mariadb.server>
+        <version.mariadb.server>11.4.3</version.mariadb.server>
         <mariadb.user>mysqluser</mariadb.user>
         <mariadb.password>mysqlpw</mariadb.password>
         <mariadb.replica.user>mysqlreplica</mariadb.replica.user>
@@ -180,7 +168,7 @@
         <docker.dbs>debezium/mariadb-server-test-database</docker.dbs>
         <docker.filter>${docker.dbs}</docker.filter>
         <docker.skip>false</docker.skip>
-        <docker.initimage>rm -f /etc/localtime; ln -s /usr/share/zoneinfo/US/Samoa /etc/localtime</docker.initimage>
+        <docker.initimage>rm -f /etc/localtime; ln -s /usr/share/zoneinfo/Pacific/Samoa /etc/localtime</docker.initimage>
     </properties>
     <build>
         <plugins>

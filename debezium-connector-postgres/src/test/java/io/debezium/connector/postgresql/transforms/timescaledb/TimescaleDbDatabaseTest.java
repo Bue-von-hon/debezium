@@ -24,11 +24,12 @@ import io.debezium.connector.postgresql.PostgresConnectorConfig;
 import io.debezium.connector.postgresql.PostgresConnectorConfig.SnapshotMode;
 import io.debezium.connector.postgresql.TestHelper;
 import io.debezium.connector.postgresql.connection.PostgresConnection;
-import io.debezium.embedded.AbstractConnectorTest;
+import io.debezium.embedded.async.AbstractAsyncEngineConnectorTest;
 import io.debezium.jdbc.JdbcConfiguration;
 import io.debezium.testing.testcontainers.ImageNames;
+import io.debezium.util.Testing;
 
-public class TimescaleDbDatabaseTest extends AbstractConnectorTest {
+public class TimescaleDbDatabaseTest extends AbstractAsyncEngineConnectorTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TimescaleDbDatabaseTest.class);
 
@@ -145,7 +146,7 @@ public class TimescaleDbDatabaseTest extends AbstractConnectorTest {
 
     @Test
     public void shouldTransformCompressedChunks() throws Exception {
-        // Testing.Print.enable();
+        Testing.Print.enable();
 
         start(PostgresConnector.class, config);
         waitForStreamingRunning("postgres", TestHelper.TEST_SERVER);
@@ -155,7 +156,8 @@ public class TimescaleDbDatabaseTest extends AbstractConnectorTest {
                 "ALTER TABLE conditions SET (timescaledb.compress, timescaledb.compress_orderby = 'time DESC', timescaledb.compress_segmentby = 'location')",
                 "SELECT compress_chunk('_timescaledb_internal._hyper_1_1_chunk')");
 
-        var records = consumeRecordsByTopic(4);
+        // 3 data messages, 1 raw compressed chunk message, 2 WAL notification messages about compression in progress
+        var records = consumeRecordsByTopic(6);
         assertConnectorIsRunning();
 
         assertThat(records.recordsForTopic("timescaledb.public.conditions")).hasSize(3);
@@ -166,7 +168,7 @@ public class TimescaleDbDatabaseTest extends AbstractConnectorTest {
 
     private void dropPublication(PostgresConnection connection) {
         try {
-            connection.execute("DROP PUBLICATION dbz_publication");
+            connection.execute("DROP PUBLICATION IF EXISTS dbz_publication");
         }
         catch (Exception e) {
             LOGGER.debug("Error while dropping publication", e);

@@ -8,7 +8,6 @@ package io.debezium.connector.mongodb;
 import java.util.concurrent.TimeUnit;
 
 import org.bson.BsonDocument;
-import org.bson.BsonString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -104,7 +103,7 @@ public class MongoDbStreamingChangeEventSource implements StreamingChangeEventSo
 
         try (var cursor = BufferingChangeStreamCursor.fromIterable(stream, taskContext, streamingMetrics, clock).start()) {
             while (context.isRunning()) {
-                waitWhenStreamingPaused(context);
+                waitWhenStreamingPaused(context, cursor);
                 var resumableEvent = cursor.tryNext();
                 if (resumableEvent == null) {
                     continue;
@@ -125,12 +124,14 @@ public class MongoDbStreamingChangeEventSource implements StreamingChangeEventSo
         }
     }
 
-    private void waitWhenStreamingPaused(ChangeEventSourceContext context) {
+    private void waitWhenStreamingPaused(ChangeEventSourceContext context, BufferingChangeStreamCursor cursor) {
         if (context.isPaused()) {
             errorHandled(() -> {
                 LOGGER.info("Streaming will now pause");
+                cursor.pause();
                 context.streamingPaused();
                 context.waitSnapshotCompletion();
+                cursor.resume();
                 LOGGER.info("Streaming resumed");
             });
         }
@@ -204,10 +205,7 @@ public class MongoDbStreamingChangeEventSource implements StreamingChangeEventSo
         }
         if (offsetContext.lastResumeToken() != null) {
             LOGGER.info("Resuming streaming from token '{}'", offsetContext.lastResumeToken());
-
-            final BsonDocument doc = new BsonDocument();
-            doc.put("_data", new BsonString(offsetContext.lastResumeToken()));
-            stream.resumeAfter(doc);
+            stream.resumeAfter(offsetContext.lastResumeTokenDoc());
         }
         else if (offsetContext.lastTimestamp() != null) {
             LOGGER.info("Resuming streaming from operation time '{}'", offsetContext.lastTimestamp());

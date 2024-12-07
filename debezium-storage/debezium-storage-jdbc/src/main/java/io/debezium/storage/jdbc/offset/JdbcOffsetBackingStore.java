@@ -105,6 +105,7 @@ public class JdbcOffsetBackingStore implements OffsetBackingStore {
             try (var ps = conn.prepareStatement(config.getTableCreate())) {
                 ps.execute();
             }
+            conn.commit();
         }, "checking / creating table", false);
     }
 
@@ -151,6 +152,8 @@ public class JdbcOffsetBackingStore implements OffsetBackingStore {
                     }
                 }
                 data = tmpData;
+                // The commit will release the lock of the debezium_offset_storage table
+                conn.commit();
             }, "loading offset data", false);
         }
         catch (SQLException e) {

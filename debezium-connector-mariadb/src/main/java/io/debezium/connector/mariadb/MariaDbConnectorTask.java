@@ -180,7 +180,6 @@ public class MariaDbConnectorTask extends BinlogSourceTask<MariaDbPartition, Mar
                 getAvailableSignalChannels(),
                 DocumentReader.defaultReader(),
                 previousOffsets);
-        resetOffset(connectorConfig, previousOffset, signalProcessor);
 
         final Configuration heartbeatConfig = config;
         final EventDispatcher<MariaDbPartition, TableId> dispatcher = new EventDispatcher<>(
@@ -272,12 +271,6 @@ public class MariaDbConnectorTask extends BinlogSourceTask<MariaDbPartition, Mar
         return records.stream().map(DataChangeEvent::getRecord).collect(Collectors.toList());
     }
 
-    @Override
-    @SuppressWarnings("unchecked")
-    protected Long getReadOnlyIncrementalSnapshotSignalOffset(MariaDbOffsetContext previousOffset) {
-        return ((MariaDbReadOnlyIncrementalSnapshotContext<TableId>) previousOffset.getIncrementalSnapshotContext()).getSignalOffset();
-    }
-
     private MariaDbValueConverters getValueConverters(MariaDbConnectorConfig connectorConfig) {
         return new MariaDbValueConverters(
                 connectorConfig.getDecimalMode(),
@@ -285,7 +278,8 @@ public class MariaDbConnectorTask extends BinlogSourceTask<MariaDbPartition, Mar
                 connectorConfig.getBigIntUnsignedHandlingMode().asBigIntUnsignedMode(),
                 connectorConfig.binaryHandlingMode(),
                 connectorConfig.isTimeAdjustedEnabled() ? MariaDbValueConverters::adjustTemporal : x -> x,
-                connectorConfig.getEventConvertingFailureHandlingMode());
+                connectorConfig.getEventConvertingFailureHandlingMode(),
+                connectorConfig.getServiceRegistry());
     }
 
     private BinlogFieldReader getFieldReader(MariaDbConnectorConfig connectorConfig) {

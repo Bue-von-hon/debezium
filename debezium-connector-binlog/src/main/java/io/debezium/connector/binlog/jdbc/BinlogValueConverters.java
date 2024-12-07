@@ -13,6 +13,8 @@ import java.nio.ByteOrder;
 import java.nio.charset.Charset;
 import java.nio.charset.IllegalCharsetNameException;
 import java.nio.charset.StandardCharsets;
+import java.sql.Blob;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Duration;
@@ -44,13 +46,16 @@ import io.debezium.config.CommonConnectorConfig.BinaryHandlingMode;
 import io.debezium.config.CommonConnectorConfig.EventConvertingFailureHandlingMode;
 import io.debezium.connector.binlog.BinlogGeometry;
 import io.debezium.connector.binlog.BinlogUnsignedIntegerConverter;
+import io.debezium.connector.binlog.charset.BinlogCharsetRegistry;
 import io.debezium.data.Json;
 import io.debezium.data.SpecialValueDecimal;
+import io.debezium.data.vector.FloatVector;
 import io.debezium.jdbc.JdbcValueConverters;
 import io.debezium.jdbc.TemporalPrecisionMode;
 import io.debezium.relational.Column;
 import io.debezium.relational.Table;
 import io.debezium.relational.ValueConverter;
+import io.debezium.service.spi.ServiceRegistry;
 import io.debezium.time.Year;
 import io.debezium.util.Loggings;
 import io.debezium.util.Strings;
@@ -76,6 +81,7 @@ import io.debezium.util.Strings;
 public abstract class BinlogValueConverters extends JdbcValueConverters {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BinlogValueConverters.class);
+    private static final Logger INVALID_VALUE_LOGGER = LoggerFactory.getLogger(BinlogValueConverters.class.getName() + ".invalid_value");
 
     /**
      * Used to parse values of TIME columns. Format: 000:00:00.000000.
@@ -93,6 +99,7 @@ public abstract class BinlogValueConverters extends JdbcValueConverters {
     private static final Pattern TIMESTAMP_FIELD_PATTERN = Pattern.compile("([0-9]*)-([0-9]*)-([0-9]*) .*");
 
     private final EventConvertingFailureHandlingMode eventConvertingFailureHandlingMode;
+    private final BinlogCharsetRegistry charsetRegistry;
 
     /**
      * Create a new instance of the value converters that always uses UTC for the default time zone when
@@ -104,15 +111,18 @@ public abstract class BinlogValueConverters extends JdbcValueConverters {
      * @param binaryHandlingMode how binary columns should be treated
      * @param adjuster a temporal adjuster to make a database specific time before conversion
      * @param eventConvertingFailureHandlingMode how to handle conversion failures
+     * @param serviceRegistry the service registry instance, should not be {@code null}
      */
     public BinlogValueConverters(DecimalMode decimalMode,
                                  TemporalPrecisionMode temporalPrecisionMode,
                                  BigIntUnsignedMode bigIntUnsignedMode,
                                  BinaryHandlingMode binaryHandlingMode,
                                  TemporalAdjuster adjuster,
-                                 EventConvertingFailureHandlingMode eventConvertingFailureHandlingMode) {
+                                 EventConvertingFailureHandlingMode eventConvertingFailureHandlingMode,
+                                 ServiceRegistry serviceRegistry) {
         super(decimalMode, temporalPrecisionMode, ZoneOffset.UTC, adjuster, bigIntUnsignedMode, binaryHandlingMode);
         this.eventConvertingFailureHandlingMode = eventConvertingFailureHandlingMode;
+        this.charsetRegistry = serviceRegistry.getService(BinlogCharsetRegistry.class);
     }
 
     @Override
@@ -173,6 +183,9 @@ public abstract class BinlogValueConverters extends JdbcValueConverters {
                 || matches(typeName, "FLOAT UNSIGNED ZEROFILL"))
                 && column.scale().isEmpty() && column.length() <= 24) {
             return SchemaBuilder.float32();
+        }
+        if (matches(typeName, "VECTOR")) {
+            return FloatVector.builder();
         }
         // Otherwise, let the base class handle it ...
         return super.schemaBuilder(column);
@@ -241,6 +254,9 @@ public abstract class BinlogValueConverters extends JdbcValueConverters {
                     // Convert BIGINT UNSIGNED internally from SIGNED to UNSIGNED based on the boundary settings
                     return (data) -> convertUnsignedBigint(column, fieldDefn, data);
             }
+        }
+        if (matches(typeName, "VECTOR")) {
+            return (data) -> convertVector(column, fieldDefn, data);
         }
 
         // We have to convert bytes encoded in the column's character set ...
@@ -325,6 +341,21 @@ public abstract class BinlogValueConverters extends JdbcValueConverters {
             return super.convertReal(column, fieldDefn, data);
         }
         return super.convertFloat(column, fieldDefn, data);
+    }
+
+    @Override
+    protected Object convertBinary(Column column, Field fieldDefn, Object data, BinaryHandlingMode mode) {
+        // During snapshots, the JDBC ResultSet returns Blob instances
+        if (data instanceof Blob) {
+            try {
+                final Blob blob = (Blob) data;
+                data = blob.getBytes(1, (int) blob.length());
+            }
+            catch (SQLException e) {
+                throw new DebeziumException("Failed to parse and read BLOB data for column " + column.name(), e);
+            }
+        }
+        return super.convertBinary(column, fieldDefn, data, mode);
     }
 
     @Override
@@ -812,9 +843,31 @@ public abstract class BinlogValueConverters extends JdbcValueConverters {
         return ((Timestamp) data).toLocalDateTime();
     }
 
+    /**
+     * Convert a value representing a Vector {@code float[]} value to a FloatVector value used in a {@link SourceRecord}.
+     *
+     * @param column the column in which the value appears
+     * @param fieldDefn the field definition for the {@link SourceRecord}'s {@link Schema}; never null
+     * @param rawData the data; may be null
+     * @return the converted value, or null if the conversion could not be made and the column allows nulls
+     * @throws IllegalArgumentException if the value could not be converted but the column does not allow nulls
+     */
+    protected Object convertVector(Column column, Field fieldDefn, Object rawData) {
+        return convertValue(column, fieldDefn, rawData, new float[0], (r) -> {
+            if (rawData instanceof float[] data) {
+                r.deliver(FloatVector.fromLogical(fieldDefn.schema(), data));
+            }
+            else if (rawData instanceof byte[] data) {
+                r.deliver(FloatVector.fromLogical(fieldDefn, data));
+            }
+        });
+    }
+
     protected abstract List<String> extractEnumAndSetOptions(Column column);
 
-    protected abstract String getJavaEncodingForCharSet(String charSetName);
+    protected String getJavaEncodingForCharSet(String charSetName) {
+        return charsetRegistry.getJavaEncodingForCharSet(charSetName);
+    }
 
     /**
      * A utility method that adjusts <a href="https://dev.mysql.com/doc/refman/8.2/en/two-digit-years.html">ambiguous</a> 2-digit
@@ -900,8 +953,8 @@ public abstract class BinlogValueConverters extends JdbcValueConverters {
         final int month = Integer.parseInt(matcher.group(2));
         final int day = Integer.parseInt(matcher.group(3));
 
-        if (year == 0 || month == 0 || day == 0) {
-            LOGGER.warn("Invalid value '{}' stored in column '{}' of table '{}' converted to empty value",
+        if (month == 0 || day == 0) {
+            INVALID_VALUE_LOGGER.warn("Invalid value '{}' stored in column '{}' of table '{}' converted to empty value",
                     dateString, column.name(), table.id());
             return null;
         }
@@ -927,8 +980,8 @@ public abstract class BinlogValueConverters extends JdbcValueConverters {
         final int month = Integer.parseInt(matcher.group(2));
         final int day = Integer.parseInt(matcher.group(3));
 
-        if (year == 0 || month == 0 || day == 0) {
-            LOGGER.warn("Invalid value '{}' stored in column '{}' of table '{}' converted to empty value",
+        if (month == 0 || day == 0) {
+            INVALID_VALUE_LOGGER.warn("Invalid value '{}' stored in column '{}' of table '{}' converted to empty value",
                     timestampString, column.name(), table.id());
             return true;
         }

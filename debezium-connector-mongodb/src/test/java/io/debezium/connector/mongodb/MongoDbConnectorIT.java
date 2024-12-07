@@ -26,6 +26,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -2701,6 +2702,101 @@ public class MongoDbConnectorIT extends AbstractMongoConnectorIT {
         assertThat(value.schema()).isSameAs(deleteRecord.valueSchema());
         assertThat(value.getString(Envelope.FieldName.OPERATION)).isEqualTo(Operation.UPDATE.code());
         assertThat(value.getInt64(Envelope.FieldName.TIMESTAMP)).isGreaterThanOrEqualTo(timestamp.toEpochMilli());
+    }
+
+    @FixFor("DBZ-6522")
+    @Test
+    public void shouldConsumeDocumentsWithComplexIds() throws Exception {
+        config = TestHelper.getConfiguration(mongo).edit()
+                .with(MongoDbConnectorConfig.POLL_INTERVAL_MS, 10)
+                .with(CommonConnectorConfig.TOPIC_PREFIX, "mongo")
+                .with(MongoDbConnectorConfig.COLLECTION_INCLUDE_LIST, "dbit.*")
+                .build();
+
+        context = new MongoDbTaskContext(config);
+        TestHelper.cleanDatabase(mongo, "dbit");
+
+        start(MongoDbConnector.class, config);
+        waitForStreamingRunning("mongodb", "mongo");
+
+        Document doc = new Document("_id", 4367438483L).append("name", "John Doe").append("age", 25);
+        insertDocuments("dbit", "colA", doc);
+
+        SourceRecords records = consumeRecordsByTopic(1);
+        assertThat(records.recordsForTopic("mongo.dbit.colA")).hasSize(1);
+
+        stopConnector();
+
+        start(MongoDbConnector.class, config);
+        waitForStreamingRunning("mongodb", "mongo");
+
+        Document doc1 = new Document("_id", 1).append("name", "Jane Doe").append("age", 22);
+        insertDocuments("dbit", "colA", doc1);
+
+        records = consumeRecordsByTopic(1);
+        assertThat(records.recordsForTopic("mongo.dbit.colA")).hasSize(1);
+
+        stopConnector();
+    }
+
+    @FixFor("DBZ-6522")
+    @Test
+    public void shouldConsumeEventsFromOffsetWithDataResumeToken() throws InterruptedException {
+        LogInterceptor logInterceptor = new LogInterceptor(MongoDbOffsetContext.class);
+
+        config = TestHelper.getConfiguration(mongo).edit()
+                .with(MongoDbConnectorConfig.POLL_INTERVAL_MS, 10)
+                .with(MongoDbConnectorConfig.COLLECTION_INCLUDE_LIST, "dbit.*")
+                .with(CommonConnectorConfig.TOPIC_PREFIX, "mongo")
+                .build();
+
+        MongoDbConnectorConfig connectorConfig = new MongoDbConnectorConfig(config);
+
+        // Create a change stream pipeline
+        var pipelineFactory = new ChangeStreamPipelineFactory(connectorConfig, new Filters.FilterConfig(config));
+        ChangeStreamPipeline pipeline = pipelineFactory.create();
+
+        var stages = pipeline.getStages();
+        String resumeToken;
+
+        // Insert a document using router and obtain resume token
+        try (var router = connect()) {
+            var routerStream = router.watch(stages, BsonDocument.class);
+            try (var rc = routerStream.cursor()) {
+                insertDocuments("dbit", "colA", new Document("_id", 1).append("name", "John"));
+                rc.next();
+                resumeToken = Objects.requireNonNull(rc.getResumeToken()).get("_data").asString().getValue();
+            }
+        }
+
+        Map<Map<String, ?>, Map<String, ?>> offset = Map.of(
+                Collect.hashMapOf("server_id", "mongo"),
+                Collect.hashMapOf(
+                        SourceInfo.TIMESTAMP, 0,
+                        SourceInfo.ORDER, -1,
+                        SourceInfo.RESUME_TOKEN,
+                        resumeToken));
+        storeOffsets(config, offset);
+
+        // Set up the replication context for connections ...
+        context = new MongoDbTaskContext(config);
+
+        // Cleanup database
+        TestHelper.cleanDatabase(mongo, "dbit");
+
+        // Before starting the connector, add data to the databases ...
+        insertDocuments("dbit", "colA", new Document("_id", 24734982398L).append("name", "Jane"));
+
+        // Start the connector ...
+        start(MongoDbConnector.class, config);
+        waitForStreamingRunning("mongodb", "mongo");
+
+        // Consume the records ...
+        SourceRecords records = consumeRecordsByTopic(1);
+        assertThat(logInterceptor.containsMessage("Old resume token format detected, attempting to parse as string " + resumeToken)).isTrue();
+        assertThat(records.recordsForTopic("mongo.dbit.colA").size()).isEqualTo(1);
+
+        assertNoRecordsToConsume();
     }
 
     @Test

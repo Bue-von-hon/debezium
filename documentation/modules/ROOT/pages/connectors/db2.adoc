@@ -11,6 +11,7 @@
 :connector-class: Db2Connector
 :connector-name: Db2
 :include-list-example: public.inventory
+:collection-container: schema
 ifdef::community[]
 
 :toc:
@@ -49,6 +50,15 @@ ifdef::community[]
 The Db2 connector has been tested with Db2 for Linux.
 It is expected that the connector would also work on other platforms such as Windows,
 and we'd love to get your feedback if you can confirm this to be the case.
+
+You can also use the Db2 connector with Db2 for z/OS.
+This feature is currently  *incubating* and is subject to change in future releases.
+For more information, see the xref:db2-property-db2-platform[`db2.platform`] configuration option.
+
+[IMPORTANT]
+====
+You cannot use {prodname} with Db2 for z/OS versions that use 6-bytes LSNs.
+====
 endif::community[]
 
 ifdef::product[]
@@ -145,8 +155,10 @@ You can find more information about snapshots in the following sections:
 
 endif::product[]
 
-[[default-workflow-for-performing-an-initial-snapshot]]
-.Default workflow that the {prodname} Db2 connector uses to perform an initial snapshot
+// Type: concept
+// ModuleID: default-workflow-that-the-db2-connector-uses-to-perform-an-initial-snapshot
+[[db2-default-workflow-for-performing-an-initial-snapshot]]
+==== Default workflow that the {prodname} Db2 connector uses to perform an initial snapshot
 
 The following workflow lists the steps that {prodname} takes to create a snapshot.
 These steps describe the process for a snapshot when the xref:db2-property-snapshot-mode[`snapshot.mode`] configuration property is set to its default value, which is `initial`.
@@ -217,7 +229,7 @@ If the connector stops again for any reason, after it restarts, it resumes strea
 After the snapshot completes, the connector begins to stream event records for subsequent database changes.
 
 |`initial`
-|The connector performs a database snapshot as described in the xref:default-workflow-for-performing-an-initial-snapshot[default workflow for creating an initial snapshot].
+|The connector performs a database snapshot as described in the xref:db2-default-workflow-for-performing-an-initial-snapshot[default workflow for creating an initial snapshot].
 After the snapshot completes, the connector begins to stream event records for subsequent database changes.
 
 |`initial_only`
@@ -228,13 +240,13 @@ After the snapshot completes, the connector stops, and does not stream event rec
 |Deprecated, see `no_data`.
 
 |`no_data`
-|The connector captures the structure of all relevant tables, performing all the steps described in the xref:default-workflow-for-performing-an-initial-snapshot[default snapshot workflow], except that it does not create `READ` events to represent the data set at the point of the connector's start-up (Step 7.b).
+|The connector captures the structure of all relevant tables, performing all the steps described in the xref:db2-default-workflow-for-performing-an-initial-snapshot[default snapshot workflow], except that it does not create `READ` events to represent the data set at the point of the connector's start-up (Step 7.b).
 
 |`recovery`
 |Set this option to restore a database schema history topic that is lost or corrupted.
 After a restart, the connector runs a snapshot that rebuilds the topic from the source tables.
-You can also set the property to periodically prune a database schema history topic that experiences unexpected growth. +
-+
+You can also set the property to periodically prune a database schema history topic that experiences unexpected growth.
+
 WARNING: Do not use this mode to perform a snapshot if schema changes were committed to the database after the last connector shutdown.
 
 |`when_needed`
@@ -434,28 +446,31 @@ The {prodname} connector for Db2 does not support schema changes while an increm
 ====
 
 // Type: procedure
-// ModuleID: debezium-db2-triggering-an-incremental-snapshot
 [id="db2-triggering-an-incremental-snapshot"]
 ==== Triggering an incremental snapshot
 
 include::{partialsdir}/modules/all-connectors/proc-triggering-an-incremental-snapshot-sql.adoc[leveloffset=+1]
 
 // Type: procedure
-// ModuleID: debezium-db2-using-the-kafka-signaling-channel-to-trigger-an-incremental-snapshot
+[id="db2-incremental-snapshots-additional-conditions"]
+==== Running an ad hoc incremental snapshots with `additional-conditions`
+
+include::{partialsdir}/modules/all-connectors/proc-running-an-ad-hoc-snapshot-with-additional-conditions.adoc[leveloffset=+1]
+
+
+// Type: procedure
 [id="db2-triggering-an-incremental-snapshot-kafka"]
 ==== Using the Kafka signaling channel to trigger an incremental snapshot
 
 include::{partialsdir}/modules/all-connectors/proc-triggering-an-incremental-snapshot-kafka.adoc[leveloffset=+1]
 
 // Type: procedure
-// ModuleID: debezium-db2-stopping-an-incremental-snapshot
 [id="db2-stopping-an-incremental-snapshot"]
 ==== Stopping an incremental snapshot
 
 include::{partialsdir}/modules/all-connectors/proc-stopping-an-incremental-snapshot-sql.adoc[leveloffset=+1]
 
 // Type: procedure
-// ModuleID: debezium-db2-using-the-kafka-signaling-channel-to-stop-an-incremental-snapshot
 [id="db2-stopping-an-incremental-snapshot-kafka"]
 ==== Using the Kafka signaling channel to stop an incremental snapshot
 
@@ -2053,7 +2068,7 @@ For information about how to obtain the driver, see xref:obtaining-the-db2-jdbc-
 
 .Additional resources
 
-* xref:descriptions-of-debezium-db2-connector-configuration-properties[]
+* xref:descriptions-of-debezium-db2-connector-configuration-properties[Db2 connector configuration properties]
 
 // Type: procedure
 [id="obtaining-the-db2-jdbc-driver"]
@@ -2403,8 +2418,13 @@ Information about the properties is organized as follows:
 * xref:db2-required-configuration-properties[Required configuration properties]
 * xref:db2-advanced-configuration-properties[Advanced configuration properties]
 * xref:debezium-db2-connector-database-history-configuration-properties[Database schema history connector configuration properties] that control how {prodname} processes events that it reads from the database schema history topic.
-** xref:debezium-db2-connector-pass-through-database-driver-configuration-properties[Pass-through database schema history properties]
-* xref:debezium-db2-connector-pass-through-database-driver-configuration-properties[Pass-through database driver properties] that control the behavior of the database driver.
+
+* xref:debezium-db2-connector-pass-through-properties[Pass-through Db2 connector configuration properties]
+** xref:debezium-db2-pass-through-database-history-properties-for-configuring-producer-and-consumer-clients[Pass-through database schema history properties for configuring producer and consumer clients]
+** xref:debezium-db2-connector-pass-through-kafka-signals-configuration-properties[Pass-through Kafka signals configuration properties]
+** xref:debezium-db2-connector-pass-through-signals-kafka-consumer-client-configuration-properties[Pass-through Kafka signals consumer client configuration properties]
+** xref:debezium-db2-connector-pass-through-kafka-sink-notification-configuration-properties[Pass-through sink notification configuration properties]
+** xref:debezium-db2-connector-pass-through-database-driver-configuration-properties[Pass-through database driver configuration properties]
 
 
 [id="db2-required-configuration-properties"]
@@ -2447,6 +2467,21 @@ The following configuration properties are _required_ unless a default value is 
 |[[db2-property-database-dbname]]<<db2-property-database-dbname, `+database.dbname+`>>
 |No default
 |The name of the Db2 database from which to stream the changes
+
+ifdef::community[]
+|[[db2-property-db2-platform]]<<db2-property-db2-platform, `+db2.platform+`>>
+|`LUW`
+|The Db2 server platform.
+You can specify one of the following options:
+[horizontal]
+ `LUW`:: Db2 for Linux, UNIX, and Windows
+ `ZOS`:: Db2 for z/OS. Support for using {prodname} with z/OS is incubating.
+
+[NOTE]
+====
+If you use {prodname} with Db2 for z/OS, it might also be necessary to configure the xref:db2-property-cdc-control-schema[`cdc.control.schema`] and xref:db2-property-cdc-change-tables-schema[`cdc.change.tables.schema`] configuration options.
+====
+endif::community[]
 
 |[[db2-property-topic-prefix]]<<db2-property-topic-prefix, `+topic.prefix+`>>
 |No default
@@ -2651,6 +2686,7 @@ For `purchaseorders` tables in any schema, the columns `pk3` and `pk4` serve as 
 See {link-prefix}:{link-avro-serialization}#avro-naming[Avro naming] for more details.
 |===
 
+// Title: Advanced {prodname} Db2 connector configuration properties
 [id="db2-advanced-configuration-properties"]
 ==== Advanced connector configuration properties
 
@@ -2693,7 +2729,7 @@ The snapshot includes the structure and data of the captured tables.
 Specify this value to populate topics with a complete representation of the data from the captured tables every time that the connector starts.
 After the snapshot completes, the connector begins to stream event records for subsequent database changes.
 
-`initial`:: The connector performs a database snapshot as described in the xref:default-workflow-for-performing-an-initial-snapshot[default workflow for creating an initial snapshot].
+`initial`:: The connector performs a database snapshot as described in the xref:db2-default-workflow-for-performing-an-initial-snapshot[default workflow for creating an initial snapshot].
 After the snapshot completes, the connector begins to stream event records for subsequent database changes.
 
 `initial_only`:: The connector performs a database a snapshot only when no offsets have been recorded for the logical server name.
@@ -2702,7 +2738,7 @@ It does not transition to streaming event records for subsequent database change
 
 `schema_only`:: Deprecated, see `no_data`.
 
-`no_data`:: The connector runs a snapshot that captures the structure of all relevant tables, performing all the steps described in the xref:default-workflow-for-performing-an-initial-snapshot[default snapshot workflow], except that it does not create `READ` events to represent the data set at the point of the connector's start-up (Step 7.b).
+`no_data`:: The connector runs a snapshot that captures the structure of all relevant tables, performing all the steps described in the xref:db2-default-workflow-for-performing-an-initial-snapshot[default snapshot workflow], except that it does not create `READ` events to represent the data set at the point of the connector's start-up (Step 7.b).
 
 `recovery`:: Set this option to restore a database schema history topic that is lost or corrupted.
 After a restart, the connector runs a snapshot that rebuilds the topic from the source tables.
@@ -2870,6 +2906,12 @@ Heartbeat messages are useful when there are many updates in a database that is 
 |No default
 |An interval in milliseconds that the connector should wait before performing a snapshot when the connector starts. If you are starting multiple connectors in a cluster, this property is useful for avoiding snapshot interruptions, which might cause re-balancing of connectors.
 
+|[[db2-property-streaming-delay-ms]]<<db2-property-streaming-delay-ms, `+streaming.delay.ms+`>>
+|0
+|Specifies the time, in milliseconds, that the connector delays the start of the streaming process after it completes a snapshot.
+Setting a delay interval helps to prevent the connector from restarting snapshots in the event that a failure occurs immediately after the snapshot completes, but before the streaming process begins.
+Set a delay value that is higher than the value of the {link-kafka-docs}/#connectconfigs_offset.flush.interval.ms[`offset.flush.interval.ms`] property that is set for the Kafka Connect worker.
+
 |[[db2-property-snapshot-include-collection-list]]<<db2-property-snapshot-include-collection-list, `+snapshot.include.collection.list+`>>
 | All tables specified in `table.include.list`
 |An optional, comma-separated list of regular expressions that match the fully-qualified names (`_<schemaName>.<tableName>_`) of the tables to include in a snapshot.
@@ -2917,7 +2959,7 @@ From a `customers.orders` table that includes the soft-delete column, `delete_fl
 
 ----
 "snapshot.select.statement.overrides": "customer.orders",
-"snapshot.select.statement.overrides.customer.orders": "SELECT * FROM [customers].[orders] WHERE delete_flag = 0 ORDER BY id DESC"
+"snapshot.select.statement.overrides.customer.orders": "SELECT * FROM customers.orders WHERE delete_flag = 0 ORDER BY id DESC"
 ----
 
 In the resulting snapshot, the connector includes only the records for which `delete_flag = 0`.
@@ -2928,9 +2970,17 @@ In the resulting snapshot, the connector includes only the records for which `de
 
 |[[db2-property-skipped-operations]]<<db2-property-skipped-operations, `+skipped.operations+`>>
 |`t`
-|A comma-separated list of operation types that will be skipped during streaming.
-The operations include: `c` for inserts/create, `u` for updates, `d` for deletes, `t` for truncates, and `none` to not skip any operations.
-By default, truncate operations are skipped (not emitted by this connector).
+|A comma-separated list of the operation types that you want the connector to skip during streaming.
+You can configure the connector to skip the following types of operations:
+
+* `c` (insert/create)
+* `u` (update)
+* `d` (delete)
+* `t` (truncate)
+
+Set the value to `none` if you do not want the connector to skip any operations.
+Because the {prodname} Db2 connector does not support `truncate` change events, setting the default `t` value has the same effect as setting the value to `none`.
+
 
 |[[db2-property-signal-data-collection]]<<db2-property-signal-data-collection, `+signal.data.collection+`>>
 |No default
@@ -3029,7 +3079,15 @@ endif::product[]
 
 |[[db2-property-custom-metric-tags]]<<db2-property-custom-metric-tags, `custom.metric.tags`>>
 |`No default`
-|The custom metric tags will accept key-value pairs to customize the MBean object name which should be appended the end of regular name, each key would represent a tag for the MBean object name, and the corresponding value would be the value of that tag the key is. For example: `k1=v1,k2=v2`.
+|Defines tags that customize MBean object names by adding metadata that provides contextual information.
+Specify a comma-separated list of key-value pairs.
+Each key represents a tag for the MBean object name, and the corresponding value represents a value for the key, for example,  +
+`k1=v1,k2=v2`
+
+The connector appends the specified tags to the base MBean object name.
+Tags can help you to organize and categorize metrics data.
+You can define tags to identify particular application instances, environments, regions, versions, and so forth.
+For more information, see xref:customized-mbean-names[Customized MBean names].
 
 |[[db2-property-errors-max-retires]]<<db2-property-errors-max-retires, `errors.max.retries`>>
 |`-1`
@@ -3044,27 +3102,64 @@ User intervention is required to restart the connector.
 `> 0`:: The connector restarts automatically until it reaches the specified maximum number of retries.
 After the next failure, the connector stops, and user intervention is required to restart it.
 
+|[[db2-property-database-query-timeout-ms]]<<db2-property-database-query-timeout-ms, `database.query.timeout.ms`>>
+|`600000` (10 minutes)
+|Specifies the time, in milliseconds, that the connector waits for a query to complete.
+Set the value to `0` (zero) to remove the timeout limit.
+
+ifdef::community[]
+|[[db2-property-cdc-control-schema]]<<db2-property-cdc-control-schema, `cdc.control.schema`>>
+|`ASNCDC`
+|Specifies the name of the database schema that stores CDC control structures.
+
+|[[db2-property-cdc-change-tables-schema]]<<db2-property-cdc-change-tables-schema, `cdc.change.tables.schema`>>
+|`ASNCDC`
+|Specifies the name of the database schema that stores CDC control structures.
+endif::community[]
+
 |===
 
 [id="debezium-db2-connector-database-history-configuration-properties"]
-==== {prodname} connector database schema history configuration properties
+==== {prodname} Db2 connector database schema history configuration properties
 
 include::{partialsdir}/modules/all-connectors/ref-connector-configuration-database-history-properties.adoc[leveloffset=+1]
 
-[id="debezium-{context}-connector-kafka-signals-configuration-properties"]
-==== {prodname} connector Kafka signals configuration properties
+[id="debezium-db2-connector-pass-through-properties"]
+==== Pass-through Db2 connector configuration properties
+
+The connector supports _pass-through_ properties that enable {prodname} to specify custom configuration options for fine-tuning the behavior of the Apache Kafka producer and consumer.
+For information about the full range of configuration properties for Kafka producers and consumers, see the {link-kafka-docs}/#configuration[Kafka documentation].
+
+[id="debezium-db2-pass-through-database-history-properties-for-configuring-producer-and-consumer-clients"]
+===== Pass-through properties for configuring how producer and consumer clients interact with schema history topics
+
+include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-database-history-properties-for-configuring-producer-and-consumer-clients.adoc[leveloffset=+1]
+
+
+[id="debezium-db2-connector-pass-through-kafka-signals-configuration-properties"]
+===== Pass-through properties for configuring how the Db2 connector interacts with the Kafka signaling topic
 
 include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-kafka-signals-configuration-properties.adoc[leveloffset=+1]
 
-[id="debezium-{context}-connector-kafka-notifications-configuration-properties"]
-==== {prodname} connector sink notifications configuration properties
 
-include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-kafka-notification-configuration-properties.adoc[leveloffset=+1]
+[id="debezium-db2-connector-pass-through-signals-kafka-consumer-client-configuration-properties"]
+===== Pass-through properties for configuring the Kafka consumer client for the signaling channel
+
+include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-signals-kafka-consumer-client-configuration-properties.adoc[leveloffset=+1]
+
+
+[id="debezium-db2-connector-pass-through-kafka-sink-notification-configuration-properties"]
+===== Pass-through properties for configuring the Db2 connector sink notification channel
+
+include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-kafka-sink-notification-configuration-properties.adoc[leveloffset=+1]
+
 
 [id="debezium-db2-connector-pass-through-database-driver-configuration-properties"]
-==== {prodname} connector pass-through database driver configuration properties
+===== {prodname} connector pass-through database driver configuration properties
 
 include::{partialsdir}/modules/all-connectors/ref-connector-pass-through-database-driver-configuration-properties.adoc[leveloffset=+1]
+
+
 
 // Type: assembly
 // ModuleID: monitoring-debezium-db2-connector-performance
@@ -3079,6 +3174,13 @@ The {prodname} Db2 connector provides three types of metrics that are in additio
 * xref:db2-schema-history-metrics[Schema history metrics] provide information about the status of the connector's schema history.
 
 {link-prefix}:{link-debezium-monitoring}#monitoring-debezium[{prodname} monitoring documentation] provides details for how to expose these metrics by using JMX.
+
+// Type: concept
+// ModuleID: monitoring-debezium-db2-connectors-customized-mbean-names
+// Title: Customized names for Db2 connector snapshot and streaming MBean objects
+=== Customized MBean names
+
+include::{partialsdir}/modules/all-connectors/frag-common-mbean-name.adoc[leveloffset=+1,tags=mbeans-shared]
 
 // Type: reference
 // ModuleID: monitoring-debezium-during-snapshots-of-db2-databases
