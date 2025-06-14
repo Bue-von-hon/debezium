@@ -10,6 +10,7 @@ import static io.debezium.pipeline.notification.IncrementalSnapshotNotificationS
 import static io.debezium.pipeline.notification.IncrementalSnapshotNotificationService.TableScanCompletionStatus.SQL_EXCEPTION;
 import static io.debezium.pipeline.notification.IncrementalSnapshotNotificationService.TableScanCompletionStatus.SUCCEEDED;
 import static io.debezium.pipeline.notification.IncrementalSnapshotNotificationService.TableScanCompletionStatus.UNKNOWN_SCHEMA;
+import static io.debezium.util.Loggings.maybeRedactSensitiveData;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -109,7 +110,7 @@ public abstract class AbstractIncrementalSnapshotChangeEventSource<P extends Par
     @SuppressWarnings("unchecked")
     public void closeWindow(P partition, String id, OffsetContext offsetContext) throws InterruptedException {
         context = (IncrementalSnapshotContext<T>) offsetContext.getIncrementalSnapshotContext();
-        LOGGER.trace("Closing Window {}", context.toString());
+        LOGGER.trace("Closing Window {}", maybeRedactSensitiveData(context));
         if (!context.closeWindow(id)) {
             return;
         }
@@ -199,7 +200,7 @@ public abstract class AbstractIncrementalSnapshotChangeEventSource<P extends Par
         }
         if (key instanceof Struct) {
             if (window.remove((Struct) key) != null) {
-                LOGGER.info("Removed '{}' from window", key);
+                LOGGER.info("Removed '{}' from window", maybeRedactSensitiveData(key));
             }
         }
     }
@@ -303,7 +304,7 @@ public abstract class AbstractIncrementalSnapshotChangeEventSource<P extends Par
                     }
                     if (LOGGER.isInfoEnabled()) {
                         LOGGER.info("Incremental snapshot for table '{}' will end at position {}", currentTableId,
-                                context.maximumKey().orElse(new Object[0]));
+                                maybeRedactSensitiveData(context.maximumKey().orElse(new Object[0])));
                     }
                 }
 
@@ -505,7 +506,7 @@ public abstract class AbstractIncrementalSnapshotChangeEventSource<P extends Par
         if (dataCollectionsToStop.isEmpty()) {
             return;
         }
-        LOGGER.trace("Stopping incremental snapshot with context {}", context);
+        LOGGER.trace("Stopping incremental snapshot with context {}", maybeRedactSensitiveData(context));
         if (!context.snapshotRunning()) {
             LOGGER.warn("No active incremental snapshot, stop ignored");
             context.unsetCorrelationId();
@@ -582,7 +583,7 @@ public abstract class AbstractIncrementalSnapshotChangeEventSource<P extends Par
 
         final String selectStatement = chunkQueryBuilder.buildChunkQuery(context, currentTable, context.currentDataCollectionId().getAdditionalCondition());
         LOGGER.debug("\t For table '{}' using select statement: '{}', key: '{}', maximum key: '{}'", currentTable.id(),
-                selectStatement, context.chunkEndPosititon(), context.maximumKey().get());
+                selectStatement, context.chunkEndPosititon(), maybeRedactSensitiveData(context.maximumKey().get()));
 
         final TableSchema tableSchema = databaseSchema.schemaFor(currentTable.id());
 

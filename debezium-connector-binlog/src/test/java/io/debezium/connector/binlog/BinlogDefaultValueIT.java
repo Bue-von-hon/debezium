@@ -43,7 +43,6 @@ import io.debezium.connector.binlog.jdbc.BinlogValueConverters;
 import io.debezium.connector.binlog.util.BinlogTestConnection;
 import io.debezium.connector.binlog.util.TestHelper;
 import io.debezium.connector.binlog.util.UniqueDatabase;
-import io.debezium.data.VerifyRecord;
 import io.debezium.doc.FixFor;
 import io.debezium.jdbc.JdbcConnection;
 import io.debezium.jdbc.JdbcValueConverters;
@@ -79,10 +78,6 @@ public abstract class BinlogDefaultValueIT<C extends SourceConnector> extends Ab
         DATABASE.createAndInitialize();
         initializeConnectorTestFramework();
         Files.delete(SCHEMA_HISTORY_PATH);
-        // TODO: remove once we upgrade Apicurio version (DBZ-7357)
-        if (VerifyRecord.isApucurioAvailable()) {
-            skipAvroValidation();
-        }
     }
 
     @After
@@ -92,17 +87,6 @@ public abstract class BinlogDefaultValueIT<C extends SourceConnector> extends Ab
         }
         finally {
             Files.delete(SCHEMA_HISTORY_PATH);
-        }
-    }
-
-    @Override
-    protected void validate(SourceRecord record) {
-        // TODO: remove once we upgrade Apicurio version (DBZ-7357)
-        if (VerifyRecord.isApucurioAvailable()) {
-            VerifyRecord.isValid(record, true);
-        }
-        else {
-            super.validate(record);
         }
     }
 
@@ -1063,19 +1047,6 @@ public abstract class BinlogDefaultValueIT<C extends SourceConnector> extends Ab
     }
 
     private String getZonedDateTimeIsoString(ZonedDateTime zdt) {
-        if (isMariaDb()) {
-            // MariaDB applies the time-zone shift to the SHOW CREATE TABLE response when generating
-            // the SQL for the default value resolution which MySQL does not. This is because MariaDB
-            // pushes the "timezone=auto" connection argument to the server level whereas the MySQL
-            // "connectionTimeZone" is managed at the driver level on data responses only. In this
-            // case, MariaDB's default value resolution will always account for the current host
-            // time-zone difference with the host-system's time-zone.
-            long serverOffsetSecs = UniqueDatabase.TIMEZONE.getRules().getOffset(zdt.toInstant()).getTotalSeconds();
-            long hostOffsetSecs = ZoneOffset.systemDefault().getRules().getOffset(zdt.toInstant()).getTotalSeconds();
-            long timeDelta = serverOffsetSecs - hostOffsetSecs;
-            zdt = zdt.minusSeconds(timeDelta);
-            return ZonedTimestamp.toIsoString(zdt, UniqueDatabase.TIMEZONE, BinlogValueConverters::adjustTemporal, null);
-        }
         return ZonedTimestamp.toIsoString(zdt, ZoneId.systemDefault(), BinlogValueConverters::adjustTemporal, null);
     }
 

@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
@@ -32,6 +33,7 @@ import org.apache.kafka.connect.errors.DataException;
 import org.apache.kafka.connect.header.Header;
 import org.apache.kafka.connect.source.SourceConnector;
 import org.apache.kafka.connect.source.SourceRecord;
+import org.awaitility.Awaitility;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -40,7 +42,6 @@ import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.config.EnumeratedValue;
 import io.debezium.config.Field;
-import io.debezium.connector.binlog.BinlogConnectorConfig.SecureConnectionMode;
 import io.debezium.connector.binlog.BinlogConnectorConfig.SnapshotMode;
 import io.debezium.connector.binlog.util.BinlogTestConnection;
 import io.debezium.connector.binlog.util.TestHelper;
@@ -48,7 +49,7 @@ import io.debezium.connector.binlog.util.UniqueDatabase;
 import io.debezium.converters.CloudEventsConverterTest;
 import io.debezium.data.Envelope;
 import io.debezium.doc.FixFor;
-import io.debezium.embedded.EmbeddedEngine.CompletionResult;
+import io.debezium.embedded.DebeziumEngineTestUtils.CompletionResult;
 import io.debezium.engine.DebeziumEngine;
 import io.debezium.jdbc.JdbcConnection;
 import io.debezium.jdbc.TemporalPrecisionMode;
@@ -59,6 +60,7 @@ import io.debezium.relational.RelationalDatabaseConnectorConfig.DecimalHandlingM
 import io.debezium.relational.RelationalDatabaseSchema;
 import io.debezium.relational.history.SchemaHistory;
 import io.debezium.schema.DatabaseSchema;
+import io.debezium.storage.file.history.DelayingFileBasedSchemaHistory;
 import io.debezium.storage.file.history.FileSchemaHistory;
 import io.debezium.storage.kafka.history.KafkaSchemaHistory;
 import io.debezium.util.Testing;
@@ -169,7 +171,6 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         assertNoConfigurationErrors(result, BinlogConnectorConfig.SCHEMA_HISTORY);
         assertNoConfigurationErrors(result, BinlogConnectorConfig.INCLUDE_SCHEMA_CHANGES);
         assertNoConfigurationErrors(result, BinlogConnectorConfig.SNAPSHOT_MODE);
-        assertNoConfigurationErrors(result, BinlogConnectorConfig.SSL_MODE);
         assertNoConfigurationErrors(result, BinlogConnectorConfig.SSL_KEYSTORE);
         assertNoConfigurationErrors(result, BinlogConnectorConfig.SSL_KEYSTORE_PASSWORD);
         assertNoConfigurationErrors(result, BinlogConnectorConfig.SSL_TRUSTSTORE);
@@ -206,7 +207,6 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         validateConfigField(result, BinlogConnectorConfig.SCHEMA_HISTORY, "io.debezium.storage.kafka.history.KafkaSchemaHistory");
         validateConfigField(result, BinlogConnectorConfig.INCLUDE_SCHEMA_CHANGES, Boolean.TRUE);
         validateConfigField(result, BinlogConnectorConfig.SNAPSHOT_MODE, SnapshotMode.INITIAL);
-        validateConfigField(result, BinlogConnectorConfig.SSL_MODE, SecureConnectionMode.PREFERRED);
         validateConfigField(result, BinlogConnectorConfig.SSL_KEYSTORE, null);
         validateConfigField(result, BinlogConnectorConfig.SSL_KEYSTORE_PASSWORD, null);
         validateConfigField(result, BinlogConnectorConfig.SSL_TRUSTSTORE, null);
@@ -2737,6 +2737,50 @@ public abstract class BinlogConnectorIT<C extends SourceConnector, P extends Bin
         // Here we count all the records obtained from binlog, not only records pushed into the sink.
         // Number of records may vary between MySQL and MariaDB and also between the runs on the same DB.
         stopConnector(value -> assertThat(logInterceptor.messageMatches("^Stopped reading binlog after [5-9] events(.*)")).isTrue());
+    }
+
+    @Test
+    public void taskStartShouldNotWaitOnSchemaHistoryRecovery() throws InterruptedException {
+        // Introduce a delay of 10 seconds in recovering every record in schema history. This is
+        // done to increase the time taken to recovery schema history.
+        Configuration config = DATABASE.defaultConfig()
+                .with(BinlogConnectorConfig.SCHEMA_HISTORY, DelayingFileBasedSchemaHistory.class.getName())
+                .with(DelayingFileBasedSchemaHistory.RECOVERY_DELAY_MS_PROPERTY, 10_000)
+                .build();
+
+        start(getConnectorClass(), config);
+        logger.info("Sleeping for 2 seconds to allow connector to start and commit an offset");
+        Thread.sleep(2_000);
+
+        stopConnector();
+
+        CountDownLatch taskStartLatch = new CountDownLatch(1);
+
+        Thread startConnectorThread = new Thread(() -> {
+            logger.info("Starting connector again");
+            start(getConnectorClass(), config, new DebeziumEngine.ConnectorCallback() {
+                @Override
+                public void taskStarted() {
+                    taskStartLatch.countDown();
+                }
+            });
+        });
+
+        startConnectorThread.start();
+
+        logger.info("Waiting for task to start");
+
+        // Wait for 5 seconds for the task to be started
+        Awaitility.await().atMost(5, TimeUnit.SECONDS).until(() -> taskStartLatch.getCount() == 0);
+
+        logger.info("Task has started, even though the schema history recovery will take long time");
+
+        // fail the test if task did not start in 5 seconds
+        if (taskStartLatch.getCount() != 0) {
+            throw new AssertionError("Task did not start in 5 seconds after " +
+                    "connector was started. Task's start method should be lightweight and " +
+                    "hence this is not expected.");
+        }
     }
 
     protected String getExpectedQuery(String statement) {

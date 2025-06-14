@@ -928,7 +928,6 @@ public class ExtractNewRecordStateTest extends AbstractExtractStateTest {
             final Map<String, String> props = new HashMap<>();
             props.put(ADD_FIELDS,
                     "source.table:META_SRC_TABLENAME,source.ts_ms:META_SRC_TS_MS,source.ts_us:META_SRC_TS_US,source.ts_ns:META_SRC_TS_NS,ts_ms:META_TS_MS,ts_us:META_TS_US,ts_ns:META_TS_NS,op:META_SRC_OP,source.scn:META_SRC_SCN,source.snapshot:META_SRC_SNAPSHOT,source.user_name:META_SRC_USER,changes:META_SRC_CHANGES");
-            props.put(DROP_TOMBSTONES, "false");
             props.put(HANDLE_TOMBSTONE_DELETES, "rewrite");
             transform.configure(props);
 
@@ -956,6 +955,55 @@ public class ExtractNewRecordStateTest extends AbstractExtractStateTest {
             final SourceRecord heartbeatRecord = createHeartbeatRecord();
             final SourceRecord unwrapped = transform.apply(heartbeatRecord);
             assertThat(unwrapped).isEqualTo(heartbeatRecord);
+        }
+    }
+
+    @Test
+    @FixFor("DBZ-7094")
+    public void testUnwrapCreateRecordRewriteWithOptionalDefaultValue() {
+        try (ExtractNewRecordState<SourceRecord> transform = new ExtractNewRecordState<>()) {
+            final Map<String, String> props = new HashMap<>();
+            props.put(HANDLE_TOMBSTONE_DELETES, "rewrite");
+            props.put(REPLACE_NULL_WITH_DEFAULT, "false");
+            transform.configure(props);
+
+            final SourceRecord createRecord = createCreateRecordWithOptionalNull();
+            final SourceRecord unwrapped = transform.apply(createRecord);
+
+            assertThat(((Struct) unwrapped.value()).getString("name")).isNull();
+        }
+    }
+
+    @Test
+    @FixFor("DBZ-7094")
+    public void testUnwrapCreateRecordRewriteWithOptionalDefaultValueAndNullReplaceWithDefault() {
+        try (ExtractNewRecordState<SourceRecord> transform = new ExtractNewRecordState<>()) {
+            final Map<String, String> props = new HashMap<>();
+            props.put(HANDLE_TOMBSTONE_DELETES, "rewrite");
+            transform.configure(props);
+
+            final SourceRecord createRecord = createCreateRecordWithOptionalNull();
+            final SourceRecord unwrapped = transform.apply(createRecord);
+
+            assertThat(((Struct) unwrapped.value()).getString("name")).isEqualTo("default_str");
+        }
+    }
+
+    @Test
+    public void testDeleteRewriteToTombstoneAndDropActualTombstone() {
+        try (ExtractNewRecordState<SourceRecord> transform = new ExtractNewRecordState<>()) {
+            final Map<String, String> props = new HashMap<>();
+            props.put(HANDLE_TOMBSTONE_DELETES, "delete-to-tombstone");
+            transform.configure(props);
+
+            final SourceRecord deleteRecord = createDeleteRecord();
+            final SourceRecord tombstoneRecord = createTombstoneRecord();
+
+            final SourceRecord unwrappedDeleteRecord = transform.apply(deleteRecord);
+            final SourceRecord unwrappedTombstoneRecord = transform.apply(tombstoneRecord);
+
+            assertThat(unwrappedDeleteRecord.value()).isNull();
+            assertThat(unwrappedTombstoneRecord).isNull();
         }
     }
 }

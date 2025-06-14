@@ -7,6 +7,8 @@ package io.debezium.connector.jdbc;
 
 import java.util.List;
 
+import io.debezium.connector.jdbc.relational.TableDescriptor;
+
 /**
  * An interface for implementing several kind of buffers
  *
@@ -33,4 +35,16 @@ public interface Buffer {
      * @return true if empty else false.
      */
     boolean isEmpty();
+
+    /**
+     * to get the table descriptor
+     * @return the table descriptor
+     */
+    TableDescriptor getTableDescriptor();
+
+    /**
+     * to remove a {@link JdbcSinkRecord} from the internal buffer and
+     * @param record the Debezium sink record
+     */
+    void remove(JdbcSinkRecord record);
 }

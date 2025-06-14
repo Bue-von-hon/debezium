@@ -28,6 +28,7 @@ import io.debezium.connector.common.CdcSourceTaskContext;
 import io.debezium.connector.oracle.AbstractOracleStreamingChangeEventSourceMetrics;
 import io.debezium.connector.oracle.OracleConnectorConfig;
 import io.debezium.connector.oracle.Scn;
+import io.debezium.connector.oracle.logminer.events.EventType;
 import io.debezium.pipeline.source.spi.EventMetadataProvider;
 import io.debezium.util.LRUCacheMap;
 import io.debezium.util.Strings;
@@ -58,6 +59,7 @@ public class LogMinerStreamingChangeEventSourceMetrics
     private final AtomicReference<Scn> oldestScn = new AtomicReference<>(Scn.NULL);
     private final AtomicReference<Instant> oldestScnTime = new AtomicReference<>();
     private final AtomicReference<String[]> currentLogFileNames = new AtomicReference<>(new String[0]);
+    private final AtomicReference<String[]> minedLogFileNames = new AtomicReference<>(new String[0]);
     private final AtomicReference<String[]> redoLogStatuses = new AtomicReference<>(new String[0]);
     private final AtomicReference<ZoneOffset> databaseZoneOffset = new AtomicReference<>(ZoneOffset.UTC);
 
@@ -76,6 +78,7 @@ public class LogMinerStreamingChangeEventSourceMetrics
     private final AtomicLong oversizedTransactionCount = new AtomicLong();
     private final AtomicLong changesCount = new AtomicLong();
     private final AtomicLong scnFreezeCount = new AtomicLong();
+    private final AtomicLong partialRollbackCount = new AtomicLong();
 
     private final DurationHistogramMetric batchProcessingDuration = new DurationHistogramMetric();
     private final DurationHistogramMetric fetchQueryDuration = new DurationHistogramMetric();
@@ -109,6 +112,7 @@ public class LogMinerStreamingChangeEventSourceMetrics
         this.sleepTime.set(connectorConfig.getLogMiningSleepTimeDefault().toMillis());
         this.clock = clock;
         this.startTime = clock.instant();
+        this.batchMetrics = new BatchMetrics(this);
         reset();
     }
 
@@ -123,6 +127,7 @@ public class LogMinerStreamingChangeEventSourceMetrics
         rolledBackTransactionCount.set(0);
         oversizedTransactionCount.set(0);
         scnFreezeCount.set(0);
+        partialRollbackCount.set(0);
 
         fetchQueryDuration.reset();
         batchProcessingDuration.reset();
@@ -180,6 +185,11 @@ public class LogMinerStreamingChangeEventSourceMetrics
     @Override
     public String[] getCurrentLogFileNames() {
         return currentLogFileNames.get();
+    }
+
+    @Override
+    public String[] getMinedLogFileNames() {
+        return minedLogFileNames.get();
     }
 
     @Override
@@ -382,6 +392,11 @@ public class LogMinerStreamingChangeEventSourceMetrics
     }
 
     @Override
+    public long getNumberOfPartialRollbackCount() {
+        return partialRollbackCount.get();
+    }
+
+    @Override
     public Set<String> getRolledBackTransactionIds() {
         return rolledBackTransactionIds.getAll();
     }
@@ -447,24 +462,33 @@ public class LogMinerStreamingChangeEventSourceMetrics
      */
     public void setOldestScnDetails(Scn oldestScn, Instant changeTime) {
         this.oldestScn.set(oldestScn);
-        this.oldestScnTime.set(changeTime);
+        this.oldestScnTime.set(oldestScn.isNull() ? null : getAdjustedChangeTime(changeTime));
     }
 
     /**
-     * Set the current iteration's logs that are being mined.
+     * Set the current iteration's online redo logs that are being mined.
      *
-     * @param logFileNames current set of logs that are part of the mining session.
+     * @param redoLogFileNames current set of online redo logs that are part of the mining session.
      */
-    public void setCurrentLogFileNames(Set<String> logFileNames) {
-        this.currentLogFileNames.set(logFileNames.toArray(String[]::new));
-        if (logFileNames.size() < minimumLogsMined.get()) {
-            minimumLogsMined.set(logFileNames.size());
+    public void setCurrentLogFileNames(Set<String> redoLogFileNames) {
+        this.currentLogFileNames.set(redoLogFileNames.toArray(String[]::new));
+    }
+
+    /**
+     * Set all logs that are currently being mined.
+     *
+     * @param minedLogFileNames all logs that are part of the mining session
+     */
+    public void setMinedLogFileNames(Set<String> minedLogFileNames) {
+        this.minedLogFileNames.set(minedLogFileNames.toArray(String[]::new));
+        if (minedLogFileNames.size() < minimumLogsMined.get()) {
+            minimumLogsMined.set(minedLogFileNames.size());
         }
         else if (minimumLogsMined.get() == 0) {
-            minimumLogsMined.set(logFileNames.size());
+            minimumLogsMined.set(minedLogFileNames.size());
         }
-        if (logFileNames.size() > maximumLogsMined.get()) {
-            maximumLogsMined.set(logFileNames.size());
+        if (minedLogFileNames.size() > maximumLogsMined.get()) {
+            maximumLogsMined.set(minedLogFileNames.size());
         }
     }
 
@@ -677,10 +701,15 @@ public class LogMinerStreamingChangeEventSourceMetrics
      */
     public void calculateLagFromSource(Instant changeTime) {
         if (changeTime != null) {
-            final Instant adjustedTime = changeTime.plusMillis(timeDifference.longValue())
-                    .minusSeconds(databaseZoneOffset.get().getTotalSeconds());
-            lagFromSourceDuration.set(Duration.between(adjustedTime, clock.instant()).abs());
+            lagFromSourceDuration.set(Duration.between(getAdjustedChangeTime(changeTime), clock.instant()).abs());
         }
+    }
+
+    /**
+     * Increases the number of partial rollback events detected.
+     */
+    public void increasePartialRollbackCount() {
+        partialRollbackCount.addAndGet(1);
     }
 
     @Override
@@ -723,6 +752,14 @@ public class LogMinerStreamingChangeEventSourceMetrics
                 ", abandonedTransactionIds=" + abandonedTransactionIds +
                 ", rolledBackTransactionIds=" + rolledBackTransactionIds +
                 "} ";
+    }
+
+    private Instant getAdjustedChangeTime(Instant changeTime) {
+        if (changeTime == null) {
+            return null;
+        }
+        return changeTime.plusMillis(timeDifference.longValue())
+                .minusSeconds(databaseZoneOffset.get().getTotalSeconds());
     }
 
     /**
@@ -867,4 +904,111 @@ public class LogMinerStreamingChangeEventSourceMetrics
         }
     }
 
+    private final BatchMetrics batchMetrics;
+
+    public BatchMetrics getBatchMetrics() {
+        return batchMetrics;
+    }
+
+    public static class BatchMetrics {
+
+        private final LogMinerStreamingChangeEventSourceMetrics metrics;
+
+        private int schemaChangeCount;
+        private int dataChangeCount;
+        private int insertCount;
+        private int updateCount;
+        private int deleteCount;
+        private int commitCount;
+        private int rollbackCount;
+        private int partialRollbackCount;
+        private int jdbcRows;
+        private int processedRows;
+        private int metadataQueryCount;
+
+        public BatchMetrics(LogMinerStreamingChangeEventSourceMetrics metrics) {
+            this.metrics = metrics;
+        }
+
+        public void schemaChangeObserved() {
+            schemaChangeCount++;
+        }
+
+        public void dataChangeEventObserved(EventType eventType) {
+            dataChangeCount++;
+
+            switch (eventType) {
+                case INSERT -> insertCount++;
+                case UPDATE -> updateCount++;
+                case DELETE -> deleteCount++;
+            }
+        }
+
+        public void commitObserved() {
+            commitCount++;
+        }
+
+        public void rollbackObserved() {
+            rollbackCount++;
+        }
+
+        public void partialRollbackObserved() {
+            partialRollbackCount++;
+        }
+
+        public void rowObserved() {
+            jdbcRows++;
+        }
+
+        public void rowProcessed() {
+            processedRows++;
+        }
+
+        public void tableMetadataQueryObserved() {
+            metadataQueryCount++;
+        }
+
+        public void updateStreamingMetrics() {
+            metrics.setLastCapturedDmlCount(dataChangeCount);
+            metrics.setLastProcessedRowsCount(processedRows);
+        }
+
+        public boolean hasProcessedAnyTransactions() {
+            return dataChangeCount > 0 || commitCount > 0 || rollbackCount > 0;
+        }
+
+        public boolean hasJdbcRows() {
+            return jdbcRows > 0;
+        }
+
+        public void reset() {
+            schemaChangeCount = 0;
+            dataChangeCount = 0;
+            insertCount = 0;
+            updateCount = 0;
+            deleteCount = 0;
+            commitCount = 0;
+            rollbackCount = 0;
+            partialRollbackCount = 0;
+            jdbcRows = 0;
+            processedRows = 0;
+            metadataQueryCount = 0;
+        }
+
+        @Override
+        public String toString() {
+            return "BatchMetrics: " +
+                    "jdbcRows=" + jdbcRows +
+                    ", processedRows=" + processedRows +
+                    ", dmlCount=" + dataChangeCount +
+                    ", ddlCount=" + schemaChangeCount +
+                    ", insertCount=" + insertCount +
+                    ", updateCount=" + updateCount +
+                    ", deleteCount=" + deleteCount +
+                    ", commitCount=" + commitCount +
+                    ", rollbackCount=" + rollbackCount +
+                    ", partialRollbackCount=" + partialRollbackCount +
+                    ", tableMetadataCount=" + metadataQueryCount;
+        }
+    }
 }

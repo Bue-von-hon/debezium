@@ -527,7 +527,10 @@ public class PostgresConnection extends JdbcConnection {
      */
     public Long currentTransactionId() throws SQLException {
         AtomicLong txId = new AtomicLong(0);
-        query("select (case pg_is_in_recovery() when 't' then 0 else txid_current() end) AS pg_current_txid", rs -> {
+        int majorVersion = connection().getMetaData().getDatabaseMajorVersion();
+        String txIdQuery = majorVersion >= 13 ? "select (case pg_is_in_recovery() when 't' then '0'::xid8 else pg_current_xact_id() end) AS pg_current_txid"
+                : "select (case pg_is_in_recovery() when 't' then 0 else txid_current() end) AS pg_current_txid";
+        query(txIdQuery, rs -> {
             if (rs.next()) {
                 txId.compareAndSet(0, rs.getLong(1));
             }
@@ -619,6 +622,7 @@ public class PostgresConnection extends JdbcConnection {
     }
 
     @Override
+    @Deprecated
     public String quotedColumnIdString(String columnName) {
         if (columnName.contains("\"")) {
             columnName = columnName.replace("\"", "\"\"");
@@ -824,7 +828,13 @@ public class PostgresConnection extends JdbcConnection {
         final String query = String.format("SELECT %s FROM %s WHERE %s",
                 columns.stream().map(this::quotedColumnIdString).collect(Collectors.joining(",")),
                 quotedTableIdString(table.id()),
-                keyColumns.stream().map(key -> key + "=?::" + table.columnWithName(key).typeName()).collect(Collectors.joining(" AND ")));
+                keyColumns.stream()
+                        .map(key -> {
+                            Column column = table.columnWithName(key);
+                            String castableType = typeRegistry.get(column.nativeType()).getName();
+                            return key + "=?::" + castableType;
+                        })
+                        .collect(Collectors.joining(" AND ")));
         return reselectColumns(query, table.id(), columns, keyValues);
     }
 

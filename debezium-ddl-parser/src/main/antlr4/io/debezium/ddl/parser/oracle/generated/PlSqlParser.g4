@@ -2332,6 +2332,7 @@ et_oracle_datapump
       // Undocumented, internal DATAPUMP operations used by Oracle
       | DEBUG '=' '(' UNSIGNED_INTEGER ',' UNSIGNED_INTEGER ')'
       | DATAPUMP INTERNAL TABLE tableview_name
+      | TEMPLATE_TABLE tableview_name
       | JOB '(' schema_name ',' tableview_name ',' UNSIGNED_INTEGER ')'
       | WORKERID UNSIGNED_INTEGER
       | PARALLEL UNSIGNED_INTEGER
@@ -3290,7 +3291,7 @@ modify_column_clauses
     ;
 
 modify_col_properties
-    : column_name datatype? (DEFAULT column_default_value)? (ENCRYPT encryption_spec | DECRYPT)? inline_constraint* lob_storage_clause? annotations_clause? //TODO alter_xmlschema_clause
+    : column_name datatype? (DEFAULT (ON NULL_)? column_default_value)? (ENCRYPT encryption_spec | DECRYPT)? inline_constraint* lob_storage_clause? annotations_clause? //TODO alter_xmlschema_clause
     ;
 
 modify_col_visibility
@@ -3456,6 +3457,9 @@ virtual_column_definition
         (GENERATED ALWAYS)?
         AS '(' expression ')'
         VIRTUAL? evaluation_edition_clause? unusable_editions_clause? inline_constraint*
+        // Oracle tools and DBMS_METADATA can return this in some use cases
+        // This is used internally by Oracle to mark the virtual column for statistics only
+        (BY USER FOR STATISTICS)?
     ;
 
 annotations_clause
@@ -3535,7 +3539,7 @@ object_type_col_properties
     ;
 
 constraint_clauses
-    : ADD '(' (out_of_line_constraint* | out_of_line_ref_constraint) ')'
+    : ADD '(' (out_of_line_constraint (',' out_of_line_constraint)* | out_of_line_ref_constraint) ')'
     | ADD  (out_of_line_constraint* | out_of_line_ref_constraint)
     | MODIFY (CONSTRAINT constraint_name | PRIMARY KEY | UNIQUE '(' column_name (',' column_name)* ')')  constraint_state CASCADE?
     | RENAME CONSTRAINT old_constraint_name TO new_constraint_name
@@ -7317,6 +7321,7 @@ non_reserved_keywords_pre12c
     | TBLORIDXPARTNUM
     | TEMPFILE
     | TEMPLATE
+    | TEMPLATE_TABLE
     | TEMPORARY
     | TEMP_TABLE
     | TEST

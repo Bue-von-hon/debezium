@@ -125,10 +125,16 @@ public abstract class AbstractJdbcSinkIT {
 
                 LOGGER.info("KafkaConsumer thread is now polling for records.");
                 while (stopLatch.getCount() == 1) {
-                    ConsumerRecords<byte[], byte[]> records = consumer.poll(Duration.ofSeconds(1));
-                    LOGGER.info("Consumer poll returned {} records", records.count());
-                    if (!records.isEmpty()) {
-                        records.forEach(r -> consumerRecords.add(getSinkRecordFromConsumerRecord(r)));
+                    try {
+                        ConsumerRecords<byte[], byte[]> records = consumer.poll(Duration.ofSeconds(1));
+                        LOGGER.info("Consumer poll returned {} records", records.count());
+                        if (!records.isEmpty()) {
+                            records.forEach(r -> consumerRecords.add(getSinkRecordFromConsumerRecord(r)));
+                        }
+                    }
+                    catch (Exception e) {
+                        LOGGER.error("Connector failed", e);
+                        break;
                     }
                 }
 
@@ -175,6 +181,10 @@ public abstract class AbstractJdbcSinkIT {
                 });
 
         sinkTask.put(records);
+        if (sinkTask.getLastProcessingException() != null) {
+            throw new RuntimeException("JDBC sink throw an exception processing the data", sinkTask.getLastProcessingException());
+        }
+
         return records;
     }
 
@@ -225,7 +235,7 @@ public abstract class AbstractJdbcSinkIT {
             case MYSQL:
                 sourceConfig.with("connector.class", "io.debezium.connector.mysql.MySqlConnector");
                 sourceConfig.with("database.password", source.getPassword());
-                sourceConfig.with("database.user", "root");
+                sourceConfig.with("database.user", source.getUsername());
                 sourceConfig.with("database.server.id", 12345);
                 sourceConfig.with("database.include.list", "test");
                 sourceConfig.with("table.include.list", "test." + tableName);

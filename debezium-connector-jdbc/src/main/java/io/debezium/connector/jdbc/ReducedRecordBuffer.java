@@ -15,6 +15,9 @@ import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.errors.ConnectException;
 
+import io.debezium.annotation.VisibleForTesting;
+import io.debezium.connector.jdbc.relational.TableDescriptor;
+
 /**
  * A reduced implementation buffer of {@link JdbcSinkRecord}.
  * It reduces events in buffer before submit to external database.
@@ -27,10 +30,18 @@ public class ReducedRecordBuffer implements Buffer {
     private Schema keySchema;
     private Schema valueSchema;
 
-    private final Map<Struct, JdbcSinkRecord> records = new HashMap<>();
+    private final Map<Object, JdbcSinkRecord> records = new HashMap<>();
+    private final TableDescriptor tableDescriptor;
 
+    @VisibleForTesting
     public ReducedRecordBuffer(JdbcSinkConnectorConfig connectorConfig) {
         this.connectorConfig = connectorConfig;
+        this.tableDescriptor = null;
+    }
+
+    public ReducedRecordBuffer(JdbcSinkConnectorConfig connectorConfig, TableDescriptor tableDescriptor) {
+        this.connectorConfig = connectorConfig;
+        this.tableDescriptor = tableDescriptor;
     }
 
     @Override
@@ -50,7 +61,7 @@ public class ReducedRecordBuffer implements Buffer {
             isSchemaChanged = true;
         }
 
-        Struct keyStruct = record.getKeyStruct(connectorConfig.getPrimaryKeyMode());
+        Struct keyStruct = record.filteredKey();
         if (keyStruct != null) {
             records.put(keyStruct, record);
         }
@@ -81,5 +92,25 @@ public class ReducedRecordBuffer implements Buffer {
     @Override
     public boolean isEmpty() {
         return records.isEmpty();
+    }
+
+    @Override
+    public TableDescriptor getTableDescriptor() {
+        return tableDescriptor;
+    }
+
+    @Override
+    public void remove(JdbcSinkRecord record) {
+        if (records.isEmpty()) {
+            return;
+        }
+
+        Struct keyStruct = record.filteredKey();
+        if (keyStruct != null) {
+            records.remove(keyStruct);
+        }
+        else {
+            throw new ConnectException("No struct-based primary key defined for record key/value, reduction buffer require struct based primary key");
+        }
     }
 }

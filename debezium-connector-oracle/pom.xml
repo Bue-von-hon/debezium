@@ -3,7 +3,7 @@
     <parent>
         <groupId>io.debezium</groupId>
         <artifactId>debezium-parent</artifactId>
-        <version>3.0.5-SNAPSHOT</version>
+        <version>3.2.0-SNAPSHOT</version>
         <relativePath>../debezium-parent/pom.xml</relativePath>
     </parent>
     <modelVersion>4.0.0</modelVersion>
@@ -57,6 +57,10 @@
         <dependency>
             <groupId>org.infinispan.protostream</groupId>
             <artifactId>protostream-processor</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.infinispan</groupId>
+            <artifactId>infinispan-component-annotations</artifactId>
         </dependency>
         <!-- Dependencies for NLS for Internationalization support -->
         <dependency>
@@ -212,7 +216,7 @@
 
         <!-- This should be kept in sync with the infinispan dependencies used -->
         <oracle.infinispan.host>${docker.host.address}</oracle.infinispan.host>
-        <oracle.infinispan.image>infinispan/server:${version.infinispan.server}</oracle.infinispan.image>
+        <oracle.infinispan.image>quay.io/infinispan/server:${version.infinispan}</oracle.infinispan.image>
         <oracle.infinispan.port>11222</oracle.infinispan.port>
         <oracle.infinispan.user>admin</oracle.infinispan.user>
         <oracle.infinispan.password>admin</oracle.infinispan.password>
@@ -408,6 +412,19 @@
             </build>
         </profile>
         <!--
+            Profile: oracle-logminer-unbuffered
+            This profile should be used to run the connector with the LogMiner unbuffered adapter.
+        -->
+        <profile>
+            <id>oracle-logminer-unbuffered</id>
+            <properties>
+                <adapter.name>logminer_unbuffered</adapter.name>
+            </properties>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+        </profile>
+        <!--
         Profile: oracle-olr
         This profile should be used to run the connector with the OpenLogReplicator adapter.
         -->
@@ -530,9 +547,6 @@
                             <testExcludes>
                                 <exclude>**/*IT</exclude>
                             </testExcludes>
-                            <testIncludes>
-                                <include>**/io/debezium/connector/oracle/rest/**</include>
-                            </testIncludes>
                         </configuration>
                     </plugin>
                     <plugin>
@@ -662,7 +676,7 @@
         </profile>
         <!-- This profile should be used for testing connector with Infinispan only -->
         <profile>
-            <id>infinispan-buffer</id>
+            <id>oracle-infinispan-buffer</id>
             <activation>
                 <activeByDefault>false</activeByDefault>
             </activation>
@@ -672,7 +686,7 @@
             <!-- todo: when using this profile, enforce oracle-xstream being mutually exclusive -->
         </profile>
         <profile>
-            <id>infinispan-buffer-remote</id>
+            <id>oracle-infinispan-buffer-remote</id>
             <activation>
                 <activeByDefault>false</activeByDefault>
             </activation>
@@ -784,7 +798,7 @@
                             <images>
                                 <!-- A container for the data server replica set -->
                                 <image>
-                                    <name>apicurio/apicurio-registry-mem:${version.apicurio}</name>
+                                    <name>quay.io/apicurio/apicurio-registry-mem:${version.apicurio}</name>
                                     <run>
                                         <namingStrategy>none</namingStrategy>
                                         <ports>

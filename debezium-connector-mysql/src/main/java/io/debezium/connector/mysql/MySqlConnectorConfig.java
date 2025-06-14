@@ -70,6 +70,13 @@ public class MySqlConnectorConfig extends BinlogConnectorConfig {
         MINIMAL_PERCONA("minimal_percona"),
 
         /**
+         * Similar to MINIMAL_PERCONA mode but prevents any table-level locks. The connector will fail if it cannot acquire a global lock.
+         * This mode ensures table locks are never used, which can be important in environments where table locks are not allowed
+         * or can cause issues.
+         */
+        MINIMAL_PERCONA_NO_TABLE_LOCKS("minimal_percona_no_table_locks"),
+
+        /**
          * This mode will avoid using ANY table locks during the snapshot process.  This mode can only be used with SnapShotMode
          * set to schema_only or schema_only_recovery.
          */
@@ -92,7 +99,7 @@ public class MySqlConnectorConfig extends BinlogConnectorConfig {
         }
 
         public boolean usesMinimalLocking() {
-            return value.equals(MINIMAL.value) || value.equals(MINIMAL_PERCONA.value);
+            return value.equals(MINIMAL.value) || value.equals(MINIMAL_PERCONA.value) || value.equals(MINIMAL_PERCONA_NO_TABLE_LOCKS.value);
         }
 
         public boolean usesLocking() {
@@ -100,7 +107,11 @@ public class MySqlConnectorConfig extends BinlogConnectorConfig {
         }
 
         public boolean flushResetsIsolationLevel() {
-            return !value.equals(MINIMAL_PERCONA.value);
+            return !value.equals(MINIMAL_PERCONA.value) && !value.equals(MINIMAL_PERCONA_NO_TABLE_LOCKS.value);
+        }
+
+        public boolean preventsTableLocks() {
+            return value.equals(MINIMAL_PERCONA_NO_TABLE_LOCKS.value);
         }
 
         /**
@@ -131,6 +142,78 @@ public class MySqlConnectorConfig extends BinlogConnectorConfig {
          */
         public static SnapshotLockingMode parse(String value, String defaultValue) {
             SnapshotLockingMode mode = parse(value);
+            if (mode == null && defaultValue != null) {
+                mode = parse(defaultValue);
+            }
+            return mode;
+        }
+    }
+
+    public enum MySqlSecureConnectionMode implements SecureConnectionMode, EnumeratedValue {
+        /**
+         * Establish an unencrypted connection.
+         */
+        DISABLED("disabled"),
+        /**
+         * Establish a secure (encrypted) connection if the server supports secure connections.
+         * Fall back to an unencrypted connection otherwise.
+         */
+        PREFERRED("preferred"),
+        /**
+         * Establish a secure connection if the server supports secure connections.
+         * The connection attempt fails if a secure connection cannot be established.
+         */
+        REQUIRED("required"),
+        /**
+         * Like REQUIRED, but additionally verify the server TLS certificate against the configured Certificate Authority
+         * (CA) certificates. The connection attempt fails if no valid matching CA certificates are found.
+         */
+        VERIFY_CA("verify_ca"),
+        /**
+         * Like VERIFY_CA, but additionally verify that the server certificate matches the host to which the connection is
+         * attempted.
+         */
+        VERIFY_IDENTITY("verify_identity");
+
+        private final String value;
+
+        MySqlSecureConnectionMode(String value) {
+            this.value = value;
+        }
+
+        @Override
+        public String getValue() {
+            return value;
+        }
+
+        /**
+         * Determine if the supplied value is one of the predefined options.
+         *
+         * @param value the configuration property value; may not be null
+         * @return the matching option, or null if no match is found
+         */
+        public static BinlogConnectorConfig.SecureConnectionMode parse(String value) {
+            if (value == null) {
+                return null;
+            }
+            value = value.trim();
+            for (MySqlSecureConnectionMode option : MySqlSecureConnectionMode.values()) {
+                if (option.getValue().equalsIgnoreCase(value)) {
+                    return option;
+                }
+            }
+            return null;
+        }
+
+        /**
+         * Determine if the supplied value is one of the predefined options.
+         *
+         * @param value the configuration property value; may not be null
+         * @param defaultValue the default value; may be null
+         * @return the matching option, or null if no match is found and the non-null default is invalid
+         */
+        public static BinlogConnectorConfig.SecureConnectionMode parse(String value, String defaultValue) {
+            BinlogConnectorConfig.SecureConnectionMode mode = parse(value);
             if (mode == null && defaultValue != null) {
                 mode = parse(defaultValue);
             }
@@ -199,6 +282,22 @@ public class MySqlConnectorConfig extends BinlogConnectorConfig {
                     + "'schema_only_recovery' and is only safe to use if no schema changes are happening while the snapshot is taken.")
             .withValidation(MySqlConnectorConfig::validateSnapshotLockingMode);
 
+    public static final Field SSL_MODE = Field.create("database.ssl.mode")
+            .withDisplayName("SSL mode")
+            .withEnum(MySqlSecureConnectionMode.class, MySqlSecureConnectionMode.PREFERRED)
+            .withWidth(ConfigDef.Width.MEDIUM)
+            .withImportance(ConfigDef.Importance.MEDIUM)
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTION_ADVANCED_SSL, 0))
+            .withDescription("Whether to use an encrypted connection to the database. Options include: "
+                    + "'disabled' to use an unencrypted connection; "
+                    + "'preferred' (the default) to establish a secure (encrypted) connection if the server supports "
+                    + "secure connections, but fall back to an unencrypted connection otherwise; "
+                    + "'required' to use a secure (encrypted) connection, and fail if one cannot be established; "
+                    + "'verify_ca' like 'required' but additionally verify the server TLS certificate against the "
+                    + "configured Certificate Authority (CA) certificates, or fail if no valid matching CA certificates are found; or "
+                    + "'verify_identity' like 'verify_ca' but additionally verify that the server certificate matches "
+                    + "the host to which the connection is attempted.");
+
     public static final Field SOURCE_INFO_STRUCT_MAKER = CommonConnectorConfig.SOURCE_INFO_STRUCT_MAKER
             .withDefault(MySqlSourceInfoStructMaker.class.getName());
 
@@ -209,7 +308,8 @@ public class MySqlConnectorConfig extends BinlogConnectorConfig {
                     BinlogConnectorConfig.GTID_SOURCE_EXCLUDES)
             .type(
                     JDBC_DRIVER,
-                    JDBC_PROTOCOL)
+                    JDBC_PROTOCOL,
+                    SSL_MODE)
             .connector(SNAPSHOT_LOCKING_MODE)
             .events(
                     GTID_SOURCE_INCLUDES,
@@ -230,6 +330,7 @@ public class MySqlConnectorConfig extends BinlogConnectorConfig {
     private final Predicate<String> gtidSourceFilter;
     private final SnapshotLockingMode snapshotLockingMode;
     private final SnapshotLockingStrategy snapshotLockingStrategy;
+    private final SecureConnectionMode secureConnectionMode;
 
     public MySqlConnectorConfig(Configuration config) {
         super(MySqlConnector.class, config, DEFAULT_SNAPSHOT_FETCH_SIZE);
@@ -237,6 +338,8 @@ public class MySqlConnectorConfig extends BinlogConnectorConfig {
 
         this.snapshotLockingMode = SnapshotLockingMode.parse(config.getString(SNAPSHOT_LOCKING_MODE), SNAPSHOT_LOCKING_MODE.defaultValueAsString());
         this.snapshotLockingStrategy = new MySqlSnapshotLockingStrategy(snapshotLockingMode);
+
+        this.secureConnectionMode = MySqlSecureConnectionMode.parse(config.getString(SSL_MODE));
 
         // Set up the GTID filter ...
         final String gtidSetIncludes = config.getString(GTID_SOURCE_INCLUDES);
@@ -282,8 +385,18 @@ public class MySqlConnectorConfig extends BinlogConnectorConfig {
     }
 
     @Override
-    protected HistoryRecordComparator getHistoryRecordComparator() {
+    public HistoryRecordComparator getHistoryRecordComparator() {
         return new MySqlHistoryRecordComparator(gtidSourceFilter, getGtidSetFactory());
+    }
+
+    @Override
+    public SecureConnectionMode getSslMode() {
+        return secureConnectionMode;
+    }
+
+    @Override
+    public boolean isSslModeEnabled() {
+        return secureConnectionMode != MySqlSecureConnectionMode.DISABLED;
     }
 
     /**
@@ -310,6 +423,11 @@ public class MySqlConnectorConfig extends BinlogConnectorConfig {
         @Override
         public boolean isIsolationLevelResetOnFlush() {
             return snapshotLockingMode.flushResetsIsolationLevel();
+        }
+
+        @Override
+        public boolean preventsTableLocks() {
+            return snapshotLockingMode.preventsTableLocks();
         }
     }
 

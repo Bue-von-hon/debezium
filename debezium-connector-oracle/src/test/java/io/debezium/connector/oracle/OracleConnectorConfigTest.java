@@ -5,6 +5,13 @@
  */
 package io.debezium.connector.oracle;
 
+import static io.debezium.connector.oracle.OracleConnectorConfig.LOG_MINING_ARCHIVE_LOG_ONLY_MODE;
+import static io.debezium.connector.oracle.OracleConnectorConfig.LOG_MINING_BUFFER_INFINISPAN_CACHE_TRANSACTIONS;
+import static io.debezium.connector.oracle.OracleConnectorConfig.LOG_MINING_BUFFER_TYPE;
+import static io.debezium.connector.oracle.OracleConnectorConfig.SIGNAL_DATA_COLLECTION;
+import static io.debezium.connector.oracle.OracleConnectorConfig.validateEhCacheGlobalConfigField;
+import static io.debezium.connector.oracle.OracleConnectorConfig.validateEhcacheConfigFieldRequired;
+import static io.debezium.connector.oracle.OracleConnectorConfig.validateLogMiningInfinispanCacheConfiguration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -13,6 +20,8 @@ import static org.junit.Assert.assertTrue;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -337,6 +346,75 @@ public class OracleConnectorConfigTest {
                 .with(OracleConnectorConfig.OLR_HOST, "localhost")
                 .with(OracleConnectorConfig.OLR_PORT, "9000")
                 .build();
+        assertThat(config.validateAndRecord(fields, LOGGER::error)).isTrue();
+    }
+
+    @Test
+    @FixFor("DBZ-8886")
+    public void shouldReturnDefaultValueForInvalidLogMiningBufferWhenValidateLogMiningInfinispanCache() {
+        Configuration configuration = Configuration.create()
+                .with(LOG_MINING_BUFFER_INFINISPAN_CACHE_TRANSACTIONS.name(), "aValue")
+                .with(LOG_MINING_BUFFER_TYPE.name(), "null")
+                .build();
+
+        Field.ValidationOutput unreachableState = (field, value, problemMessage) -> {
+            throw new RuntimeException("unreachable state");
+        };
+
+        List<Integer> actual = Stream.of(
+                () -> validateEhCacheGlobalConfigField(configuration, LOG_MINING_ARCHIVE_LOG_ONLY_MODE, unreachableState),
+                () -> validateLogMiningInfinispanCacheConfiguration(configuration, LOG_MINING_ARCHIVE_LOG_ONLY_MODE, unreachableState),
+                (Supplier<Integer>) () -> validateEhcacheConfigFieldRequired(configuration, LOG_MINING_ARCHIVE_LOG_ONLY_MODE, unreachableState))
+                .map(Supplier::get)
+                .toList();
+
+        assertThat(actual).containsOnly(0);
+    }
+
+    @Test
+    @FixFor("DBZ-8886")
+    public void shouldReturnInvalidValueForLogMiningBufferWhenValidateLogMiningBufferType() {
+        Configuration configuration = Configuration.create()
+                .with(LOG_MINING_BUFFER_TYPE.name(), "null")
+                .build();
+
+        boolean actual = LOG_MINING_BUFFER_TYPE.validate(
+                configuration,
+                (field, value, problemMessage) -> assertThat(problemMessage).isEqualTo("Value must be one of ehcache, memory, infinispan_embedded, infinispan_remote"));
+
+        assertThat(actual).isFalse();
+    }
+
+    @Test
+    @FixFor("DBZ-8886")
+    public void shouldReturnValidValueForLogMiningBufferWhenValidateLogMiningBufferType() {
+        final Configuration configuration = Configuration.create()
+                .with(LOG_MINING_BUFFER_INFINISPAN_CACHE_TRANSACTIONS.name(), "A_CORRECT_VALUE")
+                .with(LOG_MINING_BUFFER_TYPE.name(), "infinispan_embedded")
+                .build();
+
+        boolean actual = LOG_MINING_BUFFER_TYPE.validate(
+                configuration,
+                (field, value, problemMessage) -> {
+                    throw new RuntimeException("unreachable state");
+                });
+
+        assertThat(actual).isTrue();
+    }
+
+    @Test
+    @FixFor("DBZ-9001")
+    public void shouldFailValidationDueToSignalDataCollectionNotFullyQualified() {
+        List<Field> fields = List.of(SIGNAL_DATA_COLLECTION);
+        final Configuration config = Configuration.create().with(SIGNAL_DATA_COLLECTION, "schema.table").build();
+        assertThat(config.validateAndRecord(fields, LOGGER::error)).isFalse();
+    }
+
+    @Test
+    @FixFor("DBZ-9001")
+    public void shouldNotFailValidationDueToSignalDataCollectionFullyQualified() {
+        List<Field> fields = List.of(SIGNAL_DATA_COLLECTION);
+        final Configuration config = Configuration.create().with(SIGNAL_DATA_COLLECTION, "db.schema.table").build();
         assertThat(config.validateAndRecord(fields, LOGGER::error)).isTrue();
     }
 }

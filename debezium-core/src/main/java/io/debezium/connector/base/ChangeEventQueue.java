@@ -5,6 +5,8 @@
  */
 package io.debezium.connector.base;
 
+import static io.debezium.util.Loggings.maybeRedactSensitiveData;
+
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -211,7 +213,7 @@ public class ChangeEventQueue<T extends Sizeable> implements ChangeEventQueueMet
 
     protected void doEnqueue(T record) throws InterruptedException {
         if (LOGGER.isTraceEnabled()) {
-            LOGGER.trace("Enqueuing source record '{}'", record);
+            LOGGER.trace("Enqueuing source record '{}'", maybeRedactSensitiveData(record));
         }
 
         try {

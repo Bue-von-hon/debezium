@@ -10,9 +10,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Path;
 import java.sql.SQLException;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.TimeZone;
 
 import org.apache.kafka.connect.data.Field;
 import org.apache.kafka.connect.data.Schema;
@@ -37,8 +39,14 @@ import io.debezium.jdbc.JdbcConnection;
 public class MySqlConnectorNoBlobIT extends AbstractAsyncEngineConnectorTest {
 
     private static final Path SCHEMA_HISTORY_PATH = Files.createTestingPath("file-schema-history-snapshot.txt").toAbsolutePath();
-    protected static final UniqueDatabase DATABASE = new UniqueDatabase("logical_server_name",
+    protected static final UniqueDatabase DATABASE = new UniqueDatabase(
+            "logical_server_name",
             "connector_noblob_mode_test") {
+        @Override
+        public ZoneId getTimezone() {
+            return TimeZone.getDefault().toZoneId();
+        }
+
         @Override
         protected JdbcConnection forTestDatabase(String databaseName, Map<String, Object> urlProperties) {
             return MySqlTestConnection.forTestDatabase(databaseName, urlProperties);

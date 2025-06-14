@@ -22,6 +22,7 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -36,14 +37,10 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Properties;
 import java.util.Set;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
 import java.util.stream.Collectors;
 
 import org.apache.kafka.connect.data.Struct;
@@ -74,6 +71,7 @@ import io.debezium.util.BoundedConcurrentHashMap.EvictionListener;
 import io.debezium.util.Collect;
 import io.debezium.util.ColumnUtils;
 import io.debezium.util.Strings;
+import io.debezium.util.Threads;
 
 /**
  * A utility that simplifies using a JDBC connection and executing transactions composed of multiple statements.
@@ -85,7 +83,13 @@ public class JdbcConnection implements AutoCloseable {
 
     private static final int WAIT_FOR_CLOSE_SECONDS = 10;
     private static final char STATEMENT_DELIMITER = ';';
-    private static final String ESCAPE_CHAR = "\\";
+
+    /**
+     * The wildcard characters that must be escaped when constructing patterns for the JDBC
+     * {@link java.sql.DatabaseMetaData} methods such as {@code getColumns}, {@code getTables}, etc.
+     */
+    private final Set<Character> likeWildcardCharacters;
+
     private static final int STATEMENT_CACHE_CAPACITY = 10_000;
     private final static Logger LOGGER = LoggerFactory.getLogger(JdbcConnection.class);
     private static final int CONNECTION_VALID_CHECK_TIMEOUT_IN_SEC = 3;
@@ -314,7 +318,7 @@ public class JdbcConnection implements AutoCloseable {
 
                 if (value != null) {
                     // And replace the variable ...
-                    url = url.replaceAll("\\$\\{" + name + "\\}", value);
+                    url = url.replaceAll("\\$\\{" + name + "\\}", Matcher.quoteReplacement(value));
                 }
             }
         }
@@ -358,6 +362,7 @@ public class JdbcConnection implements AutoCloseable {
         this.closingQuoteCharacter = closingQuotingChar;
         this.conn = null;
         this.queryTimeout = (int) config.getQueryTimeout().toSeconds();
+        this.likeWildcardCharacters = getLikeWildcardCharacters();
     }
 
     /**
@@ -976,31 +981,31 @@ public class JdbcConnection implements AutoCloseable {
     }
 
     private void doClose() throws SQLException {
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        // attempting to close the connection gracefully
-        Future<Object> futureClose = executor.submit(() -> {
-            conn.close();
-            LOGGER.info("Connection gracefully closed");
-            return null;
-        });
         try {
-            futureClose.get(WAIT_FOR_CLOSE_SECONDS, TimeUnit.SECONDS);
-        }
-        catch (ExecutionException e) {
-            if (e.getCause() instanceof SQLException) {
-                throw (SQLException) e.getCause();
-            }
-            else if (e.getCause() instanceof RuntimeException) {
-                throw (RuntimeException) e.getCause();
-            }
-            throw new DebeziumException(e.getCause());
+            Threads.runWithTimeout(JdbcConnection.class, () -> {
+                try {
+                    conn.close();
+                    LOGGER.info("Connection gracefully closed");
+                }
+                catch (SQLException e) {
+                    throw new RuntimeException(e);
+                }
+            }, Duration.ofSeconds(WAIT_FOR_CLOSE_SECONDS), JdbcConnection.class.getSimpleName(), "jdbc-connection-close");
         }
         catch (TimeoutException | InterruptedException e) {
             LOGGER.warn("Failed to close database connection by calling close(), attempting abort()");
             conn.abort(Runnable::run);
         }
-        finally {
-            executor.shutdownNow();
+        catch (Exception e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException) {
+                Throwable rootCause = cause.getCause();
+                if (rootCause instanceof SQLException) {
+                    throw (SQLException) rootCause;
+                }
+                throw (RuntimeException) cause;
+            }
+            throw new DebeziumException(cause);
         }
     }
 
@@ -1096,7 +1101,7 @@ public class JdbcConnection implements AutoCloseable {
                 String catalogName = rs.getString(1);
                 String schemaName = rs.getString(2);
                 String tableName = rs.getString(3);
-                TableId tableId = new TableId(catalogName, schemaName, tableName);
+                TableId tableId = createTableId(catalogName, schemaName, tableName);
                 tableIds.add(tableId);
             }
         }
@@ -1198,16 +1203,15 @@ public class JdbcConnection implements AutoCloseable {
                 final String tableType = rs.getString(4);
                 if (isTableType(tableType)) {
                     totalTables++;
-                    TableId tableId = new TableId(catalogName, schemaName, tableName);
+                    TableId tableId = createTableId(catalogName, schemaName, tableName);
                     if (tableFilter == null || tableFilter.isIncluded(tableId)) {
                         tableIds.add(tableId);
                         attributesByTable.putAll(getAttributeDetails(tableId, tableType));
                     }
                 }
                 else {
-                    TableId tableId = new TableId(catalogName, schemaName, tableName);
+                    TableId tableId = createTableId(catalogName, schemaName, tableName);
                     viewIds.add(tableId);
-                    attributesByTable.putAll(getAttributeDetails(tableId, tableType));
                 }
             }
         }
@@ -1261,8 +1265,40 @@ public class JdbcConnection implements AutoCloseable {
         return catalogName;
     }
 
-    protected String escapeEscapeSequence(String str) {
-        return str.replace(ESCAPE_CHAR, ESCAPE_CHAR.concat(ESCAPE_CHAR));
+    /**
+     * Given a database object name, creates a pattern, escaping any special characters such that the pattern matches
+     * the name itself.
+     */
+    protected String createPatternFromName(String name, String searchEscapeCharacter) {
+        if (name == null) {
+            return null;
+        }
+
+        if (Strings.isNullOrBlank(searchEscapeCharacter) || searchEscapeCharacter.length() > 1) {
+            throw new DebeziumException("The driver's search escape character should be a length of 1");
+        }
+
+        final int length = name.length();
+        StringBuilder pattern = null;
+
+        final char escapeCharacter = searchEscapeCharacter.charAt(0);
+        for (int i = 0; i < length; i++) {
+            char c = name.charAt(i);
+
+            if (likeWildcardCharacters.contains(c) || escapeCharacter == c) {
+                if (pattern == null) {
+                    pattern = new StringBuilder();
+                    pattern.append(name, 0, i);
+                }
+                pattern.append(escapeCharacter);
+            }
+
+            if (pattern != null) {
+                pattern.append(c);
+            }
+        }
+
+        return pattern == null ? name : pattern.toString();
     }
 
     protected Map<TableId, List<Column>> getColumnsDetails(String databaseCatalog, String schemaNamePattern,
@@ -1270,15 +1306,13 @@ public class JdbcConnection implements AutoCloseable {
                                                            final Set<TableId> viewIds)
             throws SQLException {
         Map<TableId, List<Column>> columnsByTable = new HashMap<>();
-        if (tableName != null && tableName.contains(ESCAPE_CHAR)) {
-            tableName = escapeEscapeSequence(tableName);
-        }
-        try (ResultSet columnMetadata = metadata.getColumns(databaseCatalog, schemaNamePattern, tableName, null)) {
+        String tableNamePattern = createPatternFromName(tableName, metadata.getSearchStringEscape());
+        try (ResultSet columnMetadata = metadata.getColumns(databaseCatalog, schemaNamePattern, tableNamePattern, null)) {
             while (columnMetadata.next()) {
                 String catalogName = resolveCatalogName(columnMetadata.getString(1));
                 String schemaName = columnMetadata.getString(2);
                 String metaTableName = columnMetadata.getString(3);
-                TableId tableId = new TableId(catalogName, schemaName, metaTableName);
+                TableId tableId = createTableId(catalogName, schemaName, metaTableName);
 
                 // exclude views and non-captured tables
                 if (viewIds.contains(tableId) ||
@@ -1498,6 +1532,18 @@ public class JdbcConnection implements AutoCloseable {
         return jdbcNullable == ResultSetMetaData.columnNullable || jdbcNullable == ResultSetMetaData.columnNullableUnknown;
     }
 
+    /**
+     * Returns the wildcard characters that must be escaped when constructing patterns for the JDBC
+     * {@link java.sql.DatabaseMetaData} methods such as {@code getColumns}, {@code getTables}, etc.
+     *
+     * <p>The base implementation returns the wildcard characters defined by the ANSI SQL standard. Subclasses may
+     * override this method to include additional characters that need to be escaped in their specific database
+     * dialects.</p>
+     */
+    protected Set<Character> getLikeWildcardCharacters() {
+        return Set.of('%', '_');
+    }
+
     public <T> ResultSetMapper<T> singleResultMapper(ResultSetExtractor<T> extractor, String error) throws SQLException {
         return (rs) -> {
             if (rs.next()) {
@@ -1620,6 +1666,17 @@ public class JdbcConnection implements AutoCloseable {
     }
 
     /**
+     * Returns an SQL identifier representing the given database object name.
+     */
+    public String quoteIdentifier(String name) {
+        if (name.contains(closingQuoteCharacter)) {
+            name = name.replace(closingQuoteCharacter, closingQuoteCharacter + closingQuoteCharacter);
+        }
+
+        return openingQuoteCharacter + name + closingQuoteCharacter;
+    }
+
+    /**
      * Converts a table id into a string with all components of the id quoted so non-alphanumeric
      * characters are properly handled.
      *
@@ -1632,7 +1689,10 @@ public class JdbcConnection implements AutoCloseable {
 
     /**
      * Prepares qualified column names with appropriate quote character as per the specific database's rules.
+     *
+     * @deprecated Use {@link #quoteIdentifier(String)} instead.
      */
+    @Deprecated
     public String quotedColumnIdString(String columnName) {
         return openingQuoteCharacter + columnName + closingQuoteCharacter;
     }

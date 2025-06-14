@@ -3,7 +3,7 @@
     <parent>
         <groupId>io.debezium</groupId>
         <artifactId>debezium-parent</artifactId>
-        <version>3.0.5-SNAPSHOT</version>
+        <version>3.2.0-SNAPSHOT</version>
         <relativePath>../debezium-parent/pom.xml</relativePath>
     </parent>
     <modelVersion>4.0.0</modelVersion>
@@ -133,6 +133,16 @@
             <artifactId>rest-assured</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>io.opentelemetry.javaagent</groupId>
+            <artifactId>opentelemetry-testing-common</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry.javaagent</groupId>
+            <artifactId>opentelemetry-agent-for-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- Used for unit testing with Kafka -->
         <dependency>
             <groupId>org.apache.kafka</groupId>
@@ -145,7 +155,7 @@
         <!--
         Specify the properties for the various Docker containers.
         -->
-        <mariadb.server.image.source>mariadb</mariadb.server.image.source>
+        <mariadb.server.image.source>mirror.gcr.io/library/mariadb</mariadb.server.image.source>
         <version.mariadb.server>11.4.3</version.mariadb.server>
         <mariadb.user>mysqluser</mariadb.user>
         <mariadb.password>mysqlpw</mariadb.password>
@@ -158,6 +168,7 @@
         <mariadb.ssl.port>3306</mariadb.ssl.port>
         <mariadb.replica.port>3306</mariadb.replica.port> <!-- by default use primary as 'replica' -->
         <mariadb.init.timeout>60000</mariadb.init.timeout> <!-- 60 seconds -->
+        <apicurio.image>quay.io/apicurio/apicurio-registry-mem</apicurio.image>
         <apicurio.port>8080</apicurio.port>
         <apicurio.init.timeout>60000</apicurio.init.timeout> <!-- 60 seconds -->
         <mariadb.replica.fileset.path>${project.basedir}/src/test/docker/init-replica</mariadb.replica.fileset.path>
@@ -194,6 +205,7 @@
                                     <MARIADB_DATABASE>mysql</MARIADB_DATABASE> <!-- database created upon init -->
                                     <MARIADB_USER>${mariadb.user}</MARIADB_USER>
                                     <MARIADB_PASSWORD>${mariadb.password}</MARIADB_PASSWORD>
+                                    <TZ>UTC</TZ>
                                 </env>
                                 <ports>
                                     <port>${mariadb.port}:3306</port>
@@ -248,6 +260,7 @@
                                     <MARIADB_DATABASE>mysql</MARIADB_DATABASE> <!-- database created upon init -->
                                     <MARIADB_USER>${mariadb.user}</MARIADB_USER>
                                     <MARIADB_PASSWORD>${mariadb.password}</MARIADB_PASSWORD>
+                                    <TZ>UTC</TZ>
                                 </env>
                                 <ports>
                                     <port>${mariadb.ssl.port}:3306</port>
@@ -311,6 +324,7 @@
                                     <MARIADB_DATABASE>mysql</MARIADB_DATABASE> <!-- database created upon init -->
                                     <MARIADB_USER>${mariadb.user}</MARIADB_USER>
                                     <MARIADB_PASSWORD>${mariadb.password}</MARIADB_PASSWORD>
+                                    <TZ>UTC</TZ>
                                 </env>
                                 <ports>
                                     <port>${mariadb.gtid.port}:3306</port>
@@ -366,6 +380,7 @@
                                     <MARIADB_ROOT_PASSWORD>debezium-rocks</MARIADB_ROOT_PASSWORD>
                                     <MARIADB_USER>${mariadb.replica.user}</MARIADB_USER>
                                     <MARIADB_PASSWORD>${mariadb.replica.password}</MARIADB_PASSWORD>
+                                    <TZ>UTC</TZ>
                                 </env>
                                 <links>
                                     <link>database-gtids</link>
@@ -413,7 +428,7 @@
                             </external>
                         </image>
                         <image>
-                            <name>apicurio/apicurio-registry-mem:${version.apicurio}</name>
+                            <name>${apicurio.image}:${version.apicurio}</name>
                             <run>
                                 <namingStrategy>none</namingStrategy>
                                 <ports>
@@ -475,8 +490,9 @@
                         <database.replica.port>${mariadb.replica.port}</database.replica.port>
                         <!-- Specifies which driver to use for the tests -->
                         <skipLongRunningTests>${skipLongRunningTests}</skipLongRunningTests>
-                        <database.ssl.mode>disabled</database.ssl.mode>
+                        <database.ssl.mode>disable</database.ssl.mode>
                     </systemPropertyVariables>
+                    <argLine>-javaagent:"${settings.localRepository}/@{opentelemetry.agent.for.testing.artifact.relative.path}" -Dio.opentelemetry.javaagent.slf4j.simpleLogger.defaultLogLevel=off</argLine>
                     <runOrder>${runOrder}</runOrder>
                 </configuration>
                 <executions>
@@ -618,7 +634,7 @@
                                 <database.replica.password>${mariadb.replica.password}</database.replica.password>
                                 <database.port>${mariadb.port}</database.port>
                                 <database.replica.port>${mariadb.port}</database.replica.port>
-                                <database.ssl.mode>disabled</database.ssl.mode>
+                                <database.ssl.mode>disable</database.ssl.mode>
                                 <!-- Specifies which driver to use for the tests -->
                                 <skipLongRunningTests>false</skipLongRunningTests>
                                 <isAssemblyProfileActive>true</isAssemblyProfileActive>
@@ -661,7 +677,7 @@
                                 </goals>
                                 <configuration>
                                     <systemPropertyVariables>
-                                        <database.ssl.mode>verify_ca</database.ssl.mode>
+                                        <database.ssl.mode>verify-ca</database.ssl.mode>
                                         <database.ssl.truststore>${project.basedir}/src/test/resources/ssl/truststore</database.ssl.truststore>
                                         <database.ssl.truststore.password>debezium</database.ssl.truststore.password>
                                         <database.ssl.keystore>${project.basedir}/src/test/resources/ssl/keystore</database.ssl.keystore>
@@ -800,7 +816,7 @@
                 </plugins>
             </build>
             <properties>
-                <docker.filter>${docker.dbs},apicurio/apicurio-registry-mem:${version.apicurio}</docker.filter>
+                <docker.filter>${docker.dbs},${apicurio.image}:${version.apicurio}</docker.filter>
             </properties>
         </profile>
 
@@ -862,7 +878,7 @@
                                 <database.replica.password>${mariadb.replica.password}</database.replica.password>
                                 <database.port>${mariadb.port}</database.port>
                                 <database.replica.port>${mariadb.port}</database.replica.port>
-                                <database.ssl.mode>disabled</database.ssl.mode>
+                                <database.ssl.mode>disable</database.ssl.mode>
                                 <!-- Specifies which driver to use for the tests -->
                                 <skipLongRunningTests>false</skipLongRunningTests>
                                 <isAssemblyProfileActive>true</isAssemblyProfileActive>
@@ -940,7 +956,7 @@
                                 <database.replica.password>${mariadb.replica.password}</database.replica.password>
                                 <database.port>${mariadb.gtid.port}</database.port>
                                 <database.replica.port>${mariadb.gtid.replica.port}</database.replica.port>
-                                <database.ssl.mode>disabled</database.ssl.mode>
+                                <database.ssl.mode>disable</database.ssl.mode>
                                 <!-- Specifies which driver to use for the tests -->
                                 <skipLongRunningTests>false</skipLongRunningTests>
                                 <isAssemblyProfileActive>true</isAssemblyProfileActive>
@@ -1016,7 +1032,7 @@
                                 <database.replica.password>${mariadb.replica.password}</database.replica.password>
                                 <database.port>${mariadb.port}</database.port>
                                 <database.replica.port>${mariadb.port}</database.replica.port>
-                                <database.ssl.mode>verify_ca</database.ssl.mode>
+                                <database.ssl.mode>verify-ca</database.ssl.mode>
                                 <!-- Specifies which driver to use for the tests -->
                                 <skipLongRunningTests>false</skipLongRunningTests>
                                 <isAssemblyProfileActive>true</isAssemblyProfileActive>

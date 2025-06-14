@@ -57,11 +57,14 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
     public static final String SCHEMA_EVOLUTION = "schema.evolution";
     public static final String QUOTE_IDENTIFIERS = "quote.identifiers";
     public static final String COLUMN_NAMING_STRATEGY = "column.naming.strategy";
+    public static final String COLLECTION_TABLE_FORMAT = "collection.table.format";
+
     public static final String POSTGRES_POSTGIS_SCHEMA = "dialect.postgres.postgis.schema";
     public static final String SQLSERVER_IDENTITY_INSERT = "dialect.sqlserver.identity.insert";
     public static final String USE_REDUCTION_BUFFER = "use.reduction.buffer";
     public static final String FLUSH_MAX_RETRIES = "flush.max.retries";
     public static final String FLUSH_RETRY_DELAY_MS = "flush.retry.delay.ms";
+    public static final String CONNECTION_RESTART_ON_ERRORS = "connection.restart.on.errors";
 
     // todo add support for the ValueConverter contract
 
@@ -98,7 +101,6 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTION, 3))
             .withWidth(ConfigDef.Width.SHORT)
             .withImportance(ConfigDef.Importance.HIGH)
-            .required()
             .withDescription("Password of the database user to be used when connecting to the connection.");
 
     public static final Field CONNECTION_POOL_MIN_SIZE_FIELD = Field.create(CONNECTION_POOL_MIN_SIZE)
@@ -235,6 +237,27 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
             .withDescription(
                     "A reduction buffer consolidates the execution of SQL statements by primary key to reduce the SQL load on the target database. When set to false (the default), each incoming event is applied as a logical SQL change. When set to true, incoming events that refer to the same row will be reduced to a single logical change based on the most recent row state.");
 
+    public static final Field CONNECTION_RESTART_ON_ERRORS_FIELD = Field.create(CONNECTION_RESTART_ON_ERRORS)
+            .withDisplayName("Restart connection on errors")
+            .withType(Type.BOOLEAN)
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR_ADVANCED, 7))
+            .withWidth(ConfigDef.Width.SHORT)
+            .withImportance(ConfigDef.Importance.LOW)
+            .withDefault(false)
+            .withDescription("Specifies whether the connector should attempt to restart the connection automatically upon connection-related errors. " +
+                    "Defaults to false. " +
+                    "In environments where the sink database uses asynchronous replication, enabling this option may risk data loss or inconsistencies " +
+                    "during failover if the replica has not fully caught up with the primary.");
+
+    public static final Field COLLECTION_TABLE_FORMAT_FIELD = Field.create(COLLECTION_TABLE_FORMAT)
+            .withDisplayName("Format string using table name")
+            .withType(Type.STRING)
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTOR, 3))
+            .withWidth(ConfigDef.Width.LONG)
+            .withImportance(ConfigDef.Importance.MEDIUM)
+            .withDefault("${table}")
+            .withDescription("Alternative format that uses table name instead of topic name. Use ${schema} for schema name and ${table} for table name.");
+
     protected static final ConfigDefinition CONFIG_DEFINITION = ConfigDefinition.editor()
             .connector(
                     CONNECTION_URL_FIELD,
@@ -254,6 +277,7 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
                     QUOTE_IDENTIFIERS_FIELD,
                     COLLECTION_NAMING_STRATEGY_FIELD,
                     COLUMN_NAMING_STRATEGY_FIELD,
+                    COLLECTION_TABLE_FORMAT_FIELD,
                     USE_TIME_ZONE_FIELD,
                     POSTGRES_POSTGIS_SCHEMA_FIELD,
                     SQLSERVER_IDENTITY_INSERT_FIELD,
@@ -261,7 +285,9 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
                     FIELD_INCLUDE_LIST_FIELD,
                     FIELD_EXCLUDE_LIST_FIELD,
                     FLUSH_MAX_RETRIES_FIELD,
-                    FLUSH_RETRY_DELAY_MS_FIELD)
+                    FLUSH_RETRY_DELAY_MS_FIELD,
+                    CONNECTION_RESTART_ON_ERRORS_FIELD,
+                    CLOUDEVENTS_SCHEMA_NAME_PATTERN_FIELD)
             .create();
 
     /**
@@ -374,6 +400,8 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
     private final FieldNameFilter fieldsFilter;
     private final int batchSize;
     private final boolean useReductionBuffer;
+    private final boolean connectionRestartOnErrors;
+    private final String cloudEventsSchemaNamePattern;
 
     public JdbcSinkConnectorConfig(Map<String, String> props) {
         config = Configuration.from(props);
@@ -385,9 +413,9 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
         this.primaryKeyFields = Strings.setOf(config.getString(PRIMARY_KEY_FIELDS_FIELD), String::new);
         this.schemaEvolutionMode = SchemaEvolutionMode.parse(config.getString(SCHEMA_EVOLUTION));
         this.quoteIdentifiers = config.getBoolean(QUOTE_IDENTIFIERS_FIELD);
-        this.collectionNamingStrategy = new TemporaryBackwardCompatibleCollectionNamingStrategyProxy(
-                config.getInstance(COLLECTION_NAMING_STRATEGY_FIELD, CollectionNamingStrategy.class), this);
-        this.columnNamingStrategy = config.getInstance(COLUMN_NAMING_STRATEGY_FIELD, ColumnNamingStrategy.class);
+        this.collectionNamingStrategy = resolveCollectionNamingStrategy(config, props);
+        this.columnNamingStrategy = resolveColumnNamingStrategy(config, props);
+
         this.databaseTimezone = config.getString(USE_TIME_ZONE_FIELD);
         this.postgresPostgisSchema = config.getString(POSTGRES_POSTGIS_SCHEMA_FIELD);
         this.sqlServerIdentityInsert = config.getBoolean(SQLSERVER_IDENTITY_INSERT_FIELD);
@@ -395,6 +423,8 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
         this.useReductionBuffer = config.getBoolean(USE_REDUCTION_BUFFER_FIELD);
         this.flushMaxRetries = config.getInteger(FLUSH_MAX_RETRIES_FIELD);
         this.flushRetryDelayMs = config.getLong(FLUSH_RETRY_DELAY_MS_FIELD);
+        this.connectionRestartOnErrors = config.getBoolean(CONNECTION_RESTART_ON_ERRORS_FIELD);
+        this.cloudEventsSchemaNamePattern = config.getString(CLOUDEVENTS_SCHEMA_NAME_PATTERN_FIELD);
 
         String fieldIncludeList = config.getString(FIELD_INCLUDE_LIST_FIELD);
         String fieldExcludeList = config.getString(FIELD_EXCLUDE_LIST_FIELD);
@@ -419,10 +449,24 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
         if (!Strings.isNullOrEmpty(columnExcludeList) && !Strings.isNullOrEmpty(columnIncludeList)) {
             throw new ConnectException("Cannot define both column.exclude.list and column.include.list. Please specify only one.");
         }
+
     }
 
     public boolean validateAndRecord(Iterable<Field> fields, Consumer<String> problems) {
         return config.validateAndRecord(fields, problems);
+    }
+
+    private static int validateColumnNamingStyle(Configuration config, Field field, ValidationOutput problems) {
+        String namingStyle = config.getString(field);
+        Set<String> validStyles = Set.of("snake_case", "camel_case", "kebab_case", "upper_case", "lower_case", "default");
+
+        if (!validStyles.contains(namingStyle)) {
+            problems.accept(field, namingStyle, "Invalid column naming style: " + namingStyle +
+                    ". Valid options are: " + validStyles);
+            return 1; // Validation fail
+        }
+
+        return 0; // Validation success
     }
 
     protected static ConfigDef configDef() {
@@ -433,18 +477,22 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
         return insertMode;
     }
 
+    @Override
     public boolean isDeleteEnabled() {
         return deleteEnabled;
     }
 
+    @Override
     public boolean isTruncateEnabled() {
         return truncateEnabled;
     }
 
+    @Override
     public String getCollectionNameFormat() {
         return collectionNameFormat;
     }
 
+    @Override
     public PrimaryKeyMode getPrimaryKeyMode() {
         return primaryKeyMode;
     }
@@ -465,6 +513,7 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
         return sqlServerIdentityInsert;
     }
 
+    @Override
     public int getBatchSize() {
         return batchSize;
     }
@@ -473,6 +522,7 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
         return useReductionBuffer;
     }
 
+    @Override
     public CollectionNamingStrategy getCollectionNamingStrategy() {
         return collectionNamingStrategy;
     }
@@ -486,6 +536,7 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
         return columnNamingStrategy;
     }
 
+    @Override
     public String useTimeZone() {
         return databaseTimezone;
     }
@@ -502,6 +553,15 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
         return flushRetryDelayMs;
     }
 
+    public boolean isConnectionRestartOnErrors() {
+        return connectionRestartOnErrors;
+    }
+
+    @Override
+    public String cloudEventsSchemaNamePattern() {
+        return cloudEventsSchemaNamePattern;
+    }
+
     /** makes {@link org.hibernate.cfg.Configuration} from connector config
      *
      * @return {@link org.hibernate.cfg.Configuration}
@@ -511,7 +571,10 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
         hibernateConfig.setProperty(AvailableSettings.CONNECTION_PROVIDER, config.getString(CONNECTION_PROVIDER_FIELD));
         hibernateConfig.setProperty(AvailableSettings.JAKARTA_JDBC_URL, config.getString(CONNECTION_URL_FIELD));
         hibernateConfig.setProperty(AvailableSettings.JAKARTA_JDBC_USER, config.getString(CONNECTION_USER_FIELD));
-        hibernateConfig.setProperty(AvailableSettings.JAKARTA_JDBC_PASSWORD, config.getString(CONNECTION_PASSWORD_FIELD));
+        String password = config.getString(CONNECTION_PASSWORD_FIELD);
+        if (password != null && !password.isEmpty()) {
+            hibernateConfig.setProperty(AvailableSettings.JAKARTA_JDBC_PASSWORD, password);
+        }
         hibernateConfig.setProperty(AvailableSettings.C3P0_MIN_SIZE, config.getString(CONNECTION_POOL_MIN_SIZE_FIELD));
         hibernateConfig.setProperty(AvailableSettings.C3P0_MAX_SIZE, config.getString(CONNECTION_POOL_MAX_SIZE_FIELD));
         hibernateConfig.setProperty(AvailableSettings.C3P0_ACQUIRE_INCREMENT, config.getString(CONNECTION_POOL_ACQUIRE_INCREMENT_FIELD));
@@ -533,6 +596,18 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
 
     public String getConnectorName() {
         return Module.name();
+    }
+
+    private CollectionNamingStrategy resolveCollectionNamingStrategy(Configuration config, Map<String, String> properties) {
+        final CollectionNamingStrategy namingStrategy = config.getInstance(COLLECTION_NAMING_STRATEGY_FIELD, CollectionNamingStrategy.class);
+        namingStrategy.configure(properties);
+        return new TemporaryBackwardCompatibleCollectionNamingStrategyProxy(namingStrategy, this);
+    }
+
+    private ColumnNamingStrategy resolveColumnNamingStrategy(Configuration config, Map<String, String> properties) {
+        final ColumnNamingStrategy namingStrategy = config.getInstance(COLUMN_NAMING_STRATEGY_FIELD, ColumnNamingStrategy.class);
+        namingStrategy.configure(properties);
+        return namingStrategy;
     }
 
     private static int validateInsertMode(Configuration config, Field field, ValidationOutput problems) {
@@ -561,4 +636,5 @@ public class JdbcSinkConnectorConfig implements SinkConnectorConfig {
         }
         return 0;
     }
+
 }

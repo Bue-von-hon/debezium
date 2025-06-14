@@ -34,10 +34,22 @@ public @interface SkipWhenAdapterNameIs {
                 return adapterName.equalsIgnoreCase("xstream");
             }
         },
-        LOGMINER {
+        ANY_LOGMINER {
+            @Override
+            boolean isEqualTo(String adapterName) {
+                return adapterName.equalsIgnoreCase("logminer") || adapterName.equalsIgnoreCase("logminer_unbuffered");
+            }
+        },
+        LOGMINER_BUFFERED {
             @Override
             boolean isEqualTo(String adapterName) {
                 return adapterName.equalsIgnoreCase("logminer");
+            }
+        },
+        LOGMINER_UNBUFFERED {
+            @Override
+            boolean isEqualTo(String adapterName) {
+                return adapterName.equalsIgnoreCase("logminer_unbuffered");
             }
         },
         OLR {

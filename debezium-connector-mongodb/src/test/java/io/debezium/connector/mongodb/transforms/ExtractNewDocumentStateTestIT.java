@@ -14,18 +14,19 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import org.apache.kafka.connect.data.Field;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
-import org.apache.kafka.connect.errors.DataException;
 import org.apache.kafka.connect.header.Header;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.bson.Document;
@@ -37,6 +38,7 @@ import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.ChangeStreamPreAndPostImagesOptions;
 import com.mongodb.client.model.CreateCollectionOptions;
 
+import io.debezium.DebeziumException;
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.connector.mongodb.Module;
@@ -61,6 +63,60 @@ public class ExtractNewDocumentStateTestIT extends AbstractExtractNewDocumentSta
     @Override
     protected String getCollectionName() {
         return "functional";
+    }
+
+    @Test
+    @FixFor("DBZ-5920")
+    public void shouldTransformNestedDocuments() throws InterruptedException {
+        transformation.configure(Collect.hashMapOf(ARRAY_ENCODING, "array"));
+
+        Document document = Document.parse("""
+                {
+                  "deployInfo": {
+                    "id": 1,
+                    "project": "my-project",
+                    "technology": "mysqldb",
+                    "platformType": "kubernetes",
+                    "platforms": [],
+                    "status": true,
+                    "properties": {
+                      "url": "http://hk3cvdv00813.oocl.com:8080/",
+                      "gitHash": "3b211ff4b75d43cef054764c7e1cacd7c7d94c96",
+                      "sensitiveScanResult": null
+                    },
+                    "startTime": {"$date":"2024-08-13T06:56:12.582Z"},
+                    "endTime": {"$date":"2024-08-13T06:56:25.844Z"}
+                  }
+                }
+                """);
+
+        try (var client = connect()) {
+            client.getDatabase(DB_NAME).getCollection(this.getCollectionName())
+                    .insertOne(document);
+        }
+
+        SourceRecords records = consumeRecordsByTopic(1);
+
+        assertThat(records.recordsForTopic(this.topicName()).size()).isEqualTo(1);
+        final SourceRecord insertRecord = records.recordsForTopic(this.topicName()).get(0);
+        final SourceRecord transformedInsert = transformation.apply(insertRecord);
+        validate(transformedInsert);
+
+        final Struct transformedInsertValue = (Struct) transformedInsert.value();
+        Schema valueSchema = transformedInsert.valueSchema();
+
+        assertThat(valueSchema.field("deployInfo").schema().type()).isEqualTo(Schema.Type.STRUCT);
+        assertThat(valueSchema.field("deployInfo").schema().field("id").schema()).isEqualTo(Schema.OPTIONAL_INT32_SCHEMA);
+        assertThat(valueSchema.field("deployInfo").schema().field("project").schema()).isEqualTo(Schema.OPTIONAL_STRING_SCHEMA);
+        assertThat(valueSchema.field("deployInfo").schema().field("technology").schema()).isEqualTo(Schema.OPTIONAL_STRING_SCHEMA);
+        assertThat(valueSchema.field("deployInfo").schema().field("platformType").schema()).isEqualTo(Schema.OPTIONAL_STRING_SCHEMA);
+        assertThat(valueSchema.field("deployInfo").schema().field("platforms").schema()).isEqualTo(SchemaBuilder.array(Schema.OPTIONAL_STRING_SCHEMA).optional().build());
+        assertThat(valueSchema.field("deployInfo").schema().field("status").schema()).isEqualTo(Schema.OPTIONAL_BOOLEAN_SCHEMA);
+
+        final Struct properties = transformedInsertValue.getStruct("deployInfo").getStruct("properties");
+        assertThat(properties.getString("url")).isEqualTo("http://hk3cvdv00813.oocl.com:8080/");
+        assertThat(properties.getString("gitHash")).isEqualTo("3b211ff4b75d43cef054764c7e1cacd7c7d94c96");
+        assertThat(properties.get("sensitiveScanResult")).isNull();
     }
 
     @Test
@@ -1182,7 +1238,7 @@ public class ExtractNewDocumentStateTestIT extends AbstractExtractNewDocumentSta
         // Perform transformation
         final SourceRecord transformed = transformation.apply(record);
 
-        assertThat(transformed.headers()).hasSize(1);
+        assertThat(transformed.headers()).hasSize(4);
         Iterator<Header> headers = transformed.headers().allWithName("application/debezium-test-header");
         assertThat(headers.hasNext()).isTrue();
         assertThat(headers.next().value().toString()).isEqualTo("shouldPropagatePreviousRecordHeaders");
@@ -1425,7 +1481,7 @@ public class ExtractNewDocumentStateTestIT extends AbstractExtractNewDocumentSta
 
         final SourceRecord createRecord = createCreateRecord();
         final SourceRecord transformed = transformation.apply(createRecord);
-        assertThat(transformed.headers()).hasSize(1);
+        assertThat(transformed.headers()).hasSize(4);
         assertThat(getSourceRecordHeaderByKey(transformed, "__op")).isEqualTo(Envelope.Operation.CREATE.code());
     }
 
@@ -1441,7 +1497,7 @@ public class ExtractNewDocumentStateTestIT extends AbstractExtractNewDocumentSta
 
         final SourceRecord createRecord = createCreateRecord();
         final SourceRecord transformed = transformation.apply(createRecord);
-        assertThat(transformed.headers()).hasSize(2);
+        assertThat(transformed.headers()).hasSize(5);
         assertThat(getSourceRecordHeaderByKey(transformed, "__op")).isEqualTo(Envelope.Operation.CREATE.code());
         assertThat(getSourceRecordHeaderByKey(transformed, "__id")).isNull();
     }
@@ -1459,7 +1515,7 @@ public class ExtractNewDocumentStateTestIT extends AbstractExtractNewDocumentSta
 
         final SourceRecord createRecord = createCreateRecord();
         final SourceRecord transformed = transformation.apply(createRecord);
-        assertThat(transformed.headers()).hasSize(2);
+        assertThat(transformed.headers()).hasSize(5);
         assertThat(getSourceRecordHeaderByKey(transformed, "prefix.op")).isEqualTo(Envelope.Operation.CREATE.code());
         assertThat(getSourceRecordHeaderByKey(transformed, "prefix.source_collection")).isEqualTo(getCollectionName());
     }
@@ -1498,7 +1554,7 @@ public class ExtractNewDocumentStateTestIT extends AbstractExtractNewDocumentSta
         final SourceRecord transformed = transformation.apply(createRecord);
 
         assertThat(((Struct) transformed.value()).get(fieldPrefix + "OP")).isEqualTo(Envelope.Operation.CREATE.code());
-        assertThat(transformed.headers()).hasSize(1);
+        assertThat(transformed.headers()).hasSize(4);
         assertThat(getSourceRecordHeaderByKey(transformed, headerPrefix + "OPERATION")).isEqualTo(Envelope.Operation.CREATE.code());
     }
 
@@ -1644,7 +1700,8 @@ public class ExtractNewDocumentStateTestIT extends AbstractExtractNewDocumentSta
         final SourceRecord insertRecord = records.recordsForTopic(this.topicName()).get(0);
         final SourceRecord transformedInsert = transformation.apply(insertRecord);
 
-        assertThat(transformedInsert.valueSchema().field("empty_array")).isNull();
+        Struct value = (Struct) transformedInsert.value();
+        assertThat(value.get("empty_array")).isNull();
         VerifyRecord.isValid(transformedInsert);
     }
 
@@ -1720,7 +1777,7 @@ public class ExtractNewDocumentStateTestIT extends AbstractExtractNewDocumentSta
 
     }
 
-    @Test(expected = DataException.class)
+    @Test(expected = DebeziumException.class)
     @FixFor("DBZ-2316")
     public void testShouldThrowExceptionWithElementsDifferingStructures() throws Exception {
         waitForStreamingRunning();
@@ -1955,6 +2012,40 @@ public class ExtractNewDocumentStateTestIT extends AbstractExtractNewDocumentSta
         List<Struct> f2 = transformedInsertValue.getStruct("f1").getArray("f2");
         assertThat(f2.size()).isEqualTo(2);
         assertThat(f2.get(0).getArray("f3").size()).isEqualTo(0);
+    }
+
+    @Test
+    @FixFor("DBZ-8572")
+    public void shouldSupportNestedArraysWhenItIsNotSingleField() throws InterruptedException {
+        waitForStreamingRunning();
+
+        try (var client = connect()) {
+            client.getDatabase(DB_NAME).getCollection(this.getCollectionName())
+                    .insertOne(Document.parse("{\"f1\": [ { \"f2\": \"v1\", \"f3\": [] } ] }"));
+        }
+
+        SourceRecords records = consumeRecordsByTopic(1);
+        assertThat(records.recordsForTopic(this.topicName()).size()).isEqualTo(1);
+
+        SourceRecord insertRecord = records.recordsForTopic(this.topicName()).get(0);
+        SourceRecord transformedInsert = transformation.apply(insertRecord);
+
+        // assert schema
+        var type = transformedInsert.valueSchema().field("f1").schema().valueSchema().field("f3").schema().type();
+        assertThat(type).isEqualTo(Schema.Type.ARRAY);
+
+        // assert value
+        int nestedArraySize = Optional.of(transformedInsert.value())
+                .map(Struct.class::cast)
+                .map(v -> v.getArray("f1"))
+                .orElseThrow()
+                .stream()
+                .findFirst()
+                .map(Struct.class::cast)
+                .map(v -> v.getArray("f3"))
+                .map(Collection::size)
+                .orElseThrow();
+        assertThat(nestedArraySize).isEqualTo(0);
     }
 
     @Test

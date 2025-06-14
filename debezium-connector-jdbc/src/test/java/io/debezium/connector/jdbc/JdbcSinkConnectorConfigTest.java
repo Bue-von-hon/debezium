@@ -28,6 +28,7 @@ import io.debezium.connector.jdbc.naming.TableNamingStrategy;
 import io.debezium.connector.jdbc.naming.TemporaryBackwardCompatibleCollectionNamingStrategyProxy;
 import io.debezium.connector.jdbc.util.DebeziumSinkRecordFactory;
 import io.debezium.doc.FixFor;
+import io.debezium.junit.logging.LogInterceptor;
 import io.debezium.sink.SinkConnectorConfig.PrimaryKeyMode;
 import io.debezium.sink.naming.CollectionNamingStrategy;
 
@@ -161,10 +162,10 @@ public class JdbcSinkConnectorConfigTest {
     public void testDeprecatedDatabaseTimeZone() {
         final JdbcSinkConnectorConfig config = new JdbcSinkConnectorConfig(Map.of(JdbcSinkConnectorConfig.DEPRECATED_DATABASE_TIME_ZONE, "CEST"));
         AtomicReference<String> errorMessage = new AtomicReference<>();
+        LogInterceptor logInterceptor = new LogInterceptor(Field.class.getName());
         assertThat(config.validateAndRecord(List.of(JdbcSinkConnectorConfig.USE_TIME_ZONE_FIELD), errorMessage::set)).isTrue();
-        assertEquals(
-                "The 'use.time.zone' value is invalid: Warning: Using deprecated config option \"database.time_zone\".",
-                errorMessage.get());
+        assertThat(errorMessage.get()).isNull();
+        assertThat(logInterceptor.containsWarnMessage("Using deprecated config option \"database.time_zone\".")).isTrue();
         assertEquals("CEST", config.useTimeZone());
     }
 
@@ -176,13 +177,13 @@ public class JdbcSinkConnectorConfigTest {
         final JdbcSinkConnectorConfig config = new JdbcSinkConnectorConfig(properties);
 
         AtomicReference<String> errorMessage = new AtomicReference<>();
+        LogInterceptor logInterceptor = new LogInterceptor(Field.class.getName());
         assertThat(config.validateAndRecord(List.of(JdbcSinkConnectorConfig.COLLECTION_NAMING_STRATEGY_FIELD), errorMessage::set)).isTrue();
-        assertEquals(
-                "The 'collection.naming.strategy' value is invalid: Warning: Using deprecated config option \"table.naming.strategy\".",
-                errorMessage.get());
+        assertThat(errorMessage.get()).isNull();
+        assertThat(logInterceptor.containsWarnMessage("Using deprecated config option \"table.naming.strategy\".")).isTrue();
         assertThat(config.validateAndRecord(List.of(JdbcSinkConnectorConfig.COLLECTION_NAME_FORMAT_FIELD), errorMessage::set)).isTrue();
-        assertEquals("The 'collection.name.format' value is invalid: Warning: Using deprecated config option \"table.name.format\".",
-                errorMessage.get());
+        assertThat(errorMessage.get()).isNull();
+        assertThat(logInterceptor.containsWarnMessage("Using deprecated config option \"table.naming.strategy\".")).isTrue();
 
         // testing the proxy
         TemporaryBackwardCompatibleCollectionNamingStrategyProxy collectionNamingStrategyProxy = (TemporaryBackwardCompatibleCollectionNamingStrategyProxy) config
@@ -211,6 +212,24 @@ public class JdbcSinkConnectorConfigTest {
         else {
             fail("originalStrategy in the proxy must be instance of TableNamingStrategy");
         }
+    }
+
+    @Test
+    @FixFor("DBZ-7810")
+    public void testEmptyPassword() {
+        final Map<String, String> properties = new HashMap<>();
+        properties.put(JdbcSinkConnectorConfig.CONNECTION_PROVIDER, "io.debezium.AcmeConnectionProvider");
+        properties.put(JdbcSinkConnectorConfig.CONNECTION_URL, "jdbc://url");
+        properties.put(JdbcSinkConnectorConfig.CONNECTION_USER, "user");
+        properties.put(JdbcSinkConnectorConfig.CONNECTION_PASSWORD, ""); // Empty password
+
+        final JdbcSinkConnectorConfig config = new JdbcSinkConnectorConfig(properties);
+        final Properties ormProperties = config.getHibernateConfiguration().getProperties();
+        assertThat(ormProperties).isNotNull();
+        assertThat(ormProperties.get(AvailableSettings.CONNECTION_PROVIDER)).isEqualTo("io.debezium.AcmeConnectionProvider");
+        assertThat(ormProperties.get(AvailableSettings.JAKARTA_JDBC_URL)).isEqualTo("jdbc://url");
+        assertThat(ormProperties.get(AvailableSettings.JAKARTA_JDBC_USER)).isEqualTo("user");
+        assertThat(ormProperties.get(AvailableSettings.JAKARTA_JDBC_PASSWORD)).isNull(); // Password should be null
     }
 
     // @Test

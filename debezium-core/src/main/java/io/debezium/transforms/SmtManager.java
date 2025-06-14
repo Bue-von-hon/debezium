@@ -7,6 +7,7 @@ package io.debezium.transforms;
 
 import static io.debezium.data.Envelope.Operation.MESSAGE;
 import static io.debezium.data.Envelope.Operation.TRUNCATE;
+import static io.debezium.util.Loggings.maybeRedactSensitiveData;
 
 import java.util.Map;
 
@@ -62,11 +63,32 @@ public class SmtManager<R extends ConnectRecord<R>> {
         return true;
     }
 
+    public boolean isValidHeartBeat(final R record) {
+        if (record.valueSchema() == null ||
+                record.valueSchema().name() == null ||
+                !SchemaFactory.get().isHeartBeatSchema(record.valueSchema())) {
+            LOGGER.debug("Expected heartbeat schema for transformation, passing it unchanged");
+            return false;
+        }
+        return true;
+    }
+
+    public boolean isValidNotification(final R record) {
+        if (record.valueSchema() == null ||
+                record.valueSchema().name() == null ||
+                !SchemaFactory.get().isNotificationSchema(record.valueSchema())) {
+            LOGGER.debug("Expected notification schema for transformation, passing it unchanged");
+            return false;
+        }
+        return true;
+    }
+
     public boolean isValidKey(final R record) {
         if (record.keySchema() == null ||
                 record.keySchema().name() == null ||
                 !record.keySchema().name().endsWith(RECORD_ENVELOPE_KEY_SCHEMA_NAME_SUFFIX)) {
-            LOGGER.debug("Expected Key Schema for transformation, passing it unchanged. Message key: \"{}\"", record.key());
+            LOGGER.debug("Expected Key Schema for transformation, passing it unchanged. Message "
+                    + "key: \"{}\"", maybeRedactSensitiveData(record.key()));
             return false;
         }
         return true;

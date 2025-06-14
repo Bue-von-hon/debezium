@@ -25,7 +25,6 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -36,6 +35,7 @@ import java.util.TimeZone;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
 import javax.management.InstanceNotFoundException;
@@ -128,12 +128,39 @@ public class SqlServerConnectorIT extends AbstractAsyncEngineConnectorTest {
     }
 
     @Test
-    public void createAndDelete() throws Exception {
+    public void createAndDeleteWithDataQueryModeFunctionWithoutFetchThreshold() throws Exception {
+        createAndDelete(builder -> builder
+                .with(SqlServerConnectorConfig.DATA_QUERY_MODE, SqlServerConnectorConfig.DataQueryMode.FUNCTION)
+                .with(SqlServerConnectorConfig.STREAMING_FETCH_SIZE, 0));
+    }
+
+    @Test
+    public void createAndDeleteWithDataQueryModeFunctionWithFetchThreshold() throws Exception {
+        createAndDelete(builder -> builder
+                .with(SqlServerConnectorConfig.DATA_QUERY_MODE, SqlServerConnectorConfig.DataQueryMode.FUNCTION)
+                .with(SqlServerConnectorConfig.STREAMING_FETCH_SIZE, 3));
+    }
+
+    @Test
+    public void createAndDeleteWithDataQueryModeDirectWithoutFetchThreshold() throws Exception {
+        createAndDelete(builder -> builder
+                .with(SqlServerConnectorConfig.DATA_QUERY_MODE, SqlServerConnectorConfig.DataQueryMode.DIRECT)
+                .with(SqlServerConnectorConfig.STREAMING_FETCH_SIZE, 0));
+    }
+
+    @Test
+    public void createAndDeleteWithDataQueryModeDirectWithFetchThreshold() throws Exception {
+        createAndDelete(builder -> builder
+                .with(SqlServerConnectorConfig.DATA_QUERY_MODE, SqlServerConnectorConfig.DataQueryMode.DIRECT)
+                .with(SqlServerConnectorConfig.STREAMING_FETCH_SIZE, 3));
+    }
+
+    private void createAndDelete(UnaryOperator<Configuration.Builder> configAugmenter) throws Exception {
         final int RECORDS_PER_TABLE = 5;
         final int TABLES = 2;
         final int ID_START = 10;
-        final Configuration config = TestHelper.defaultConfig()
-                .with(SqlServerConnectorConfig.SNAPSHOT_MODE, SnapshotMode.INITIAL)
+        final Configuration config = configAugmenter.apply(TestHelper.defaultConfig()
+                .with(SqlServerConnectorConfig.SNAPSHOT_MODE, SnapshotMode.INITIAL))
                 .build();
 
         start(SqlServerConnector.class, config);
@@ -211,6 +238,7 @@ public class SqlServerConnectorIT extends AbstractAsyncEngineConnectorTest {
         final Configuration config = TestHelper.defaultConfig()
                 .with(SqlServerConnectorConfig.SNAPSHOT_MODE, SnapshotMode.INITIAL)
                 .with(SqlServerConnectorConfig.DATA_QUERY_MODE, SqlServerConnectorConfig.DataQueryMode.DIRECT)
+                .with(SqlServerConnectorConfig.STREAMING_FETCH_SIZE, 3)
                 .build();
 
         start(SqlServerConnector.class, config);
@@ -887,14 +915,12 @@ public class SqlServerConnectorIT extends AbstractAsyncEngineConnectorTest {
                     try {
                         final Lsn minLsn = connection.getMinLsn(TestHelper.TEST_DATABASE_1, tableName);
                         final Lsn maxLsn = connection.getMaxLsn(TestHelper.TEST_DATABASE_1);
-                        SqlServerChangeTable[] tables = Collections.singletonList(ct).toArray(new SqlServerChangeTable[]{});
                         final List<Integer> ids = new ArrayList<>();
-                        connection.getChangesForTables(TestHelper.TEST_DATABASE_1, tables, minLsn, maxLsn, resultsets -> {
-                            final ResultSet rs = resultsets[0];
+                        try (ResultSet rs = connection.getChangesForTable(ct, minLsn, maxLsn)) {
                             while (rs.next()) {
                                 ids.add(rs.getInt("id"));
                             }
-                        });
+                        }
                         if (ids.equals(expectedIds)) {
                             resultMap.put(tableName, true);
                         }
@@ -2647,10 +2673,10 @@ public class SqlServerConnectorIT extends AbstractAsyncEngineConnectorTest {
                 "CREATE TABLE s2.tableb (id int PRIMARY KEY, valb integer);";
         connection.execute(statements);
         connection.setAutoCommit(true);
-        TestHelper.enableSchemaTableCdc(connection, new TableId(null, "s1", "tablea"));
-        TestHelper.enableSchemaTableCdc(connection, new TableId(null, "s1", "tableb"));
-        TestHelper.enableSchemaTableCdc(connection, new TableId(null, "s2", "tablea"));
-        TestHelper.enableSchemaTableCdc(connection, new TableId(null, "s2", "tableb"));
+        TestHelper.enableTableCdc(connection, new TableId(null, "s1", "tablea"));
+        TestHelper.enableTableCdc(connection, new TableId(null, "s1", "tableb"));
+        TestHelper.enableTableCdc(connection, new TableId(null, "s2", "tablea"));
+        TestHelper.enableTableCdc(connection, new TableId(null, "s2", "tableb"));
 
         // Test exclude filter, s2 schema and default dbo schema should be included.
         Configuration config = TestHelper.defaultConfig()
@@ -3414,12 +3440,12 @@ public class SqlServerConnectorIT extends AbstractAsyncEngineConnectorTest {
         }
 
         @Override
-        public void recover(Offsets<?, ?> offsets, Tables schema, DdlParser ddlParser) {
+        public void recover(Offsets<?, ?> offsets, Tables schema, DdlParser ddlParser) throws InterruptedException {
             delegate.recover(offsets, schema, ddlParser);
         }
 
         @Override
-        public void recover(Map<Map<String, ?>, Map<String, ?>> offsets, Tables schema, DdlParser ddlParser) {
+        public void recover(Map<Map<String, ?>, Map<String, ?>> offsets, Tables schema, DdlParser ddlParser) throws InterruptedException {
             delegate.recover(offsets, schema, ddlParser);
         }
 

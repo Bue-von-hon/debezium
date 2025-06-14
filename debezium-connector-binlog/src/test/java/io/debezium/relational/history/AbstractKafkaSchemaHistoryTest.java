@@ -40,7 +40,10 @@ import io.debezium.relational.ddl.DdlParser;
 import io.debezium.storage.kafka.history.KafkaSchemaHistory;
 import io.debezium.text.ParsingException;
 import io.debezium.util.Collect;
+import io.debezium.util.Loggings;
 import io.debezium.util.Testing;
+
+import ch.qos.logback.classic.Level;
 
 /**
  * @author Randall Hauch
@@ -118,7 +121,7 @@ public abstract class AbstractKafkaSchemaHistoryTest<P extends BinlogPartition, 
 
     protected abstract DdlParser getDdlParser();
 
-    private void testHistoryTopicContent(String topicName, boolean skipUnparseableDDL) {
+    private void testHistoryTopicContent(String topicName, boolean skipUnparseableDDL) throws InterruptedException {
         interceptor = new LogInterceptor(KafkaSchemaHistory.class);
         // Start up the history ...
         Configuration config = Configuration.create()
@@ -302,6 +305,9 @@ public abstract class AbstractKafkaSchemaHistoryTest<P extends BinlogPartition, 
     public void shouldSkipMessageOnDDLFilter() throws Exception {
         String topicName = "stop-on-ddlfilter-schema-changes";
 
+        final LogInterceptor logInterceptor = new LogInterceptor(Loggings.class);
+        logInterceptor.setLoggerLevel(Loggings.class, Level.TRACE);
+
         // Create the empty topic ...
         kafka.createTopic(topicName, 1, 1);
 
@@ -327,7 +333,7 @@ public abstract class AbstractKafkaSchemaHistoryTest<P extends BinlogPartition, 
     }
 
     @Test
-    public void testExists() {
+    public void testExists() throws InterruptedException {
         String topicName = "exists-schema-changes";
 
         // happy path

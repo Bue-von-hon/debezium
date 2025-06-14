@@ -6,7 +6,6 @@
 package io.debezium.connector.jdbc;
 
 import static io.debezium.connector.jdbc.JdbcSinkConnectorConfig.SchemaEvolutionMode.NONE;
-import static io.debezium.connector.jdbc.JdbcSinkRecord.FieldDescriptor;
 
 import java.sql.SQLException;
 import java.time.Duration;
@@ -32,6 +31,7 @@ import io.debezium.connector.jdbc.dialect.DatabaseDialect;
 import io.debezium.connector.jdbc.relational.TableDescriptor;
 import io.debezium.metadata.CollectionId;
 import io.debezium.sink.DebeziumSinkRecord;
+import io.debezium.sink.field.FieldDescriptor;
 import io.debezium.sink.spi.ChangeEventSink;
 import io.debezium.util.Clock;
 import io.debezium.util.Metronome;
@@ -46,7 +46,6 @@ public class JdbcChangeEventSink implements ChangeEventSink {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(JdbcChangeEventSink.class);
 
-    public static final String SCHEMA_CHANGE_VALUE = "SchemaChangeValue";
     public static final String DETECT_SCHEMA_CHANGE_RECORD_MSG = "Schema change records are not supported by JDBC connector. Adjust `topics` or `topics.regex` to exclude schema change topic.";
 
     private final JdbcSinkConnectorConfig config;
@@ -75,7 +74,8 @@ public class JdbcChangeEventSink implements ChangeEventSink {
 
         for (SinkRecord kafkaSinkRecord : records) {
 
-            JdbcSinkRecord record = new JdbcKafkaSinkRecord(kafkaSinkRecord, config.getPrimaryKeyMode(), config.getPrimaryKeyFields(), config.getFieldFilter(), dialect);
+            JdbcSinkRecord record = new JdbcKafkaSinkRecord(kafkaSinkRecord, config.getPrimaryKeyMode(), config.getPrimaryKeyFields(), config.getFieldFilter(),
+                    config.cloudEventsSchemaNamePattern(), dialect);
             LOGGER.trace("Processing {}", record);
 
             validate(record);
@@ -85,12 +85,6 @@ public class JdbcChangeEventSink implements ChangeEventSink {
 
                 LOGGER.warn("Ignored to write record from topic '{}' partition '{}' offset '{}'. No resolvable table name", record.topicName(), record.partition(),
                         record.offset());
-                continue;
-            }
-
-            if (record.isTombstone()) {
-                // Skip only Debezium Envelope tombstone not the one produced by ExtractNewRecordState SMT
-                LOGGER.debug("Skipping tombstone record {}", record);
                 continue;
             }
 
@@ -116,42 +110,41 @@ public class JdbcChangeEventSink implements ChangeEventSink {
                 }
             }
 
-            if (record.isDelete()) {
+            if (record.isDelete() || record.isTombstone()) {
                 if (!config.isDeleteEnabled()) {
                     LOGGER.debug("Deletes are not enabled, skipping delete for topic '{}'", record.topicName());
                     continue;
                 }
 
-                if (upsertBufferByTable.get(collectionId) != null && !upsertBufferByTable.get(collectionId).isEmpty()) {
+                final Buffer upsertBufferToFlush = upsertBufferByTable.get(collectionId);
+                if (upsertBufferToFlush != null && !upsertBufferToFlush.isEmpty()) {
                     // When a delete event arrives, update buffer must be flushed to avoid losing the delete
                     // for the same record after its update.
-
-                    flushBufferWithRetries(collectionId, upsertBufferByTable.get(collectionId).flush());
+                    if (config.isUseReductionBuffer()) {
+                        upsertBufferToFlush.remove(record);
+                    }
+                    else {
+                        flushBufferWithRetries(collectionId, upsertBufferToFlush);
+                    }
                 }
 
-                Buffer tableIdBuffer = resolveBuffer(deleteBufferByTable, collectionId, record);
-                List<JdbcSinkRecord> toFlush = tableIdBuffer.add(record);
-                flushBufferWithRetries(collectionId, toFlush);
+                flushBufferRecordsWithRetries(collectionId, getRecordsToFlush(deleteBufferByTable, collectionId, record));
             }
             else {
-                if (deleteBufferByTable.get(collectionId) != null && !deleteBufferByTable.get(collectionId).isEmpty()) {
+                final Buffer deleteBufferToFlush = deleteBufferByTable.get(collectionId);
+                if (deleteBufferToFlush != null && !deleteBufferToFlush.isEmpty()) {
                     // When an insert arrives, delete buffer must be flushed to avoid losing an insert for the same record after its deletion.
                     // this because at the end we will always flush inserts before deletes.
-                    flushBufferWithRetries(collectionId, deleteBufferByTable.get(collectionId).flush());
+                    if (config.isUseReductionBuffer()) {
+                        deleteBufferToFlush.remove(record);
+                    }
+                    else {
+                        flushBufferWithRetries(collectionId, deleteBufferToFlush);
+                    }
                 }
 
-                Stopwatch updateBufferStopwatch = Stopwatch.reusable();
-                updateBufferStopwatch.start();
-
-                Buffer tableIdBuffer = resolveBuffer(upsertBufferByTable, collectionId, record);
-
-                List<JdbcSinkRecord> toFlush = tableIdBuffer.add(record);
-                updateBufferStopwatch.stop();
-
-                LOGGER.trace("[PERF] Update buffer execution time {}", updateBufferStopwatch.durations());
-                flushBufferWithRetries(collectionId, toFlush);
+                flushBufferRecordsWithRetries(collectionId, getRecordsToFlush(upsertBufferByTable, collectionId, record));
             }
-
         }
 
         flushBuffers(upsertBufferByTable);
@@ -165,20 +158,74 @@ public class JdbcChangeEventSink implements ChangeEventSink {
         }
     }
 
-    private Buffer resolveBuffer(Map<CollectionId, Buffer> bufferMap, CollectionId collectionId, JdbcSinkRecord record) {
+    private BufferFlushRecords getRecordsToFlush(Map<CollectionId, Buffer> bufferMap, CollectionId collectionId, JdbcSinkRecord record) {
+        Stopwatch stopwatch = Stopwatch.reusable();
+        stopwatch.start();
+
+        Buffer buffer = getOrCreateBuffer(bufferMap, collectionId, record);
+
+        if (isSchemaChanged(record, buffer.getTableDescriptor())) {
+            flushBufferWithRetries(collectionId, buffer);
+
+            // Explicitly remove as we need to recreate the buffer
+            bufferMap.remove(collectionId);
+
+            buffer = getOrCreateBuffer(bufferMap, collectionId, record);
+        }
+
+        List<JdbcSinkRecord> toFlush = buffer.add(record);
+        stopwatch.stop();
+
+        LOGGER.trace("[PERF] Resolve and add record execution time for collection '{}': {}", collectionId.name(), stopwatch.durations());
+
+        return new BufferFlushRecords(buffer, toFlush);
+    }
+
+    private Buffer getOrCreateBuffer(Map<CollectionId, Buffer> bufferMap, CollectionId collectionId, JdbcSinkRecord record) {
+        return bufferMap.computeIfAbsent(collectionId, (id) -> {
+            final TableDescriptor tableDescriptor;
+            try {
+                tableDescriptor = checkAndApplyTableChangesIfNeeded(collectionId, record);
+            }
+            catch (SQLException e) {
+                throw new ConnectException("Error while checking and applying table changes for collection '" + collectionId + "'", e);
+            }
+            return createBuffer(config, tableDescriptor, record);
+        });
+    }
+
+    // Describes a specific buffer and a potential subset of records in the buffer to be flushed
+    private record BufferFlushRecords(Buffer buffer, List<JdbcSinkRecord> records) {
+    }
+
+    private Buffer createBuffer(JdbcSinkConnectorConfig config, TableDescriptor tableDescriptor, JdbcSinkRecord record) {
         if (config.isUseReductionBuffer() && !record.keyFieldNames().isEmpty()) {
-            return bufferMap.computeIfAbsent(collectionId, k -> new ReducedRecordBuffer(config));
+            return new ReducedRecordBuffer(config, tableDescriptor);
         }
         else {
-            return bufferMap.computeIfAbsent(collectionId, k -> new RecordBuffer(config));
+            return new RecordBuffer(config, tableDescriptor);
         }
+    }
+
+    private boolean isSchemaChanged(JdbcSinkRecord record, TableDescriptor tableDescriptor) {
+        Set<String> missingFields = dialect.resolveMissingFields(record, tableDescriptor);
+        LOGGER.debug("Schema change detected for '{}', missing fields: {}", tableDescriptor.getId().toFullIdentiferString(), missingFields);
+        return !missingFields.isEmpty();
     }
 
     private void flushBuffers(Map<CollectionId, Buffer> bufferByTable) {
-        bufferByTable.forEach((collectionId, recordBuffer) -> flushBufferWithRetries(collectionId, recordBuffer.flush()));
+        bufferByTable.forEach(this::flushBufferWithRetries);
     }
 
-    private void flushBufferWithRetries(CollectionId collectionId, List<JdbcSinkRecord> toFlush) {
+    private void flushBufferRecordsWithRetries(CollectionId collectionId, BufferFlushRecords bufferFlushRecords) {
+        flushBufferWithRetries(collectionId, bufferFlushRecords.records(), bufferFlushRecords.buffer.getTableDescriptor());
+    }
+
+    private void flushBufferWithRetries(CollectionId collectionId, Buffer buffer) {
+        flushBufferWithRetries(collectionId, buffer.flush(), buffer.getTableDescriptor());
+    }
+
+    private void flushBufferWithRetries(CollectionId collectionId, List<JdbcSinkRecord> toFlush, TableDescriptor tableDescriptor) {
         int retries = 0;
         Exception lastException = null;
 
@@ -195,7 +242,7 @@ public class JdbcChangeEventSink implements ChangeEventSink {
                         throw new ConnectException("Interrupted while waiting to retry flush records", e);
                     }
                 }
-                flushBuffer(collectionId, toFlush);
+                flushBuffer(collectionId, toFlush, tableDescriptor);
                 return;
             }
             catch (Exception e) {
@@ -211,13 +258,12 @@ public class JdbcChangeEventSink implements ChangeEventSink {
         throw new ConnectException("Exceeded max retries " + flushMaxRetries + " times, failed to process sink records", lastException);
     }
 
-    private void flushBuffer(CollectionId collectionId, List<JdbcSinkRecord> toFlush) throws SQLException {
+    private void flushBuffer(CollectionId collectionId, List<JdbcSinkRecord> toFlush, TableDescriptor table) throws SQLException {
         Stopwatch flushBufferStopwatch = Stopwatch.reusable();
         Stopwatch tableChangesStopwatch = Stopwatch.reusable();
         if (!toFlush.isEmpty()) {
             LOGGER.debug("Flushing records in JDBC Writer for table: {}", collectionId.name());
             tableChangesStopwatch.start();
-            final TableDescriptor table = checkAndApplyTableChangesIfNeeded(collectionId, toFlush.get(0));
             tableChangesStopwatch.stop();
             String sqlStatement = getSqlStatement(table, toFlush.get(0));
             flushBufferStopwatch.start();

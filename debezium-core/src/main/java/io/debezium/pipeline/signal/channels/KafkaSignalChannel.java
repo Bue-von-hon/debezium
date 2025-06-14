@@ -24,6 +24,7 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.debezium.DebeziumException;
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.config.Field;
@@ -92,6 +93,12 @@ public class KafkaSignalChannel implements SignalChannelReader {
             .withDescription("Consumer group id for the signal topic")
             .withDefault("kafka-signal");
 
+    private static final Field.Set ALL_FIELDS = Field.setOf(
+            SIGNAL_TOPIC,
+            BOOTSTRAP_SERVERS,
+            SIGNAL_POLL_TIMEOUT_MS,
+            GROUP_ID);
+
     private Optional<SignalRecord> processSignal(ConsumerRecord<String, String> record) {
 
         if (!connectorName.equals(record.key())) {
@@ -141,12 +148,16 @@ public class KafkaSignalChannel implements SignalChannelReader {
 
     @Override
     public void init(CommonConnectorConfig connectorConfig) {
-
         this.connectorName = connectorConfig.getLogicalName();
         Configuration signalConfig = connectorConfig.getConfig().subset(CONFIGURATION_FIELD_PREFIX_STRING, false)
                 .edit()
                 .withDefault(KafkaSignalChannel.SIGNAL_TOPIC, connectorName + "-signal")
                 .build();
+
+        if (!signalConfig.validateAndRecord(ALL_FIELDS, LOGGER::error)) {
+            throw new DebeziumException("Signal channel " + CHANNEL_NAME + " configuration is invalid. See logs for details.");
+        }
+
         this.topicName = signalConfig.getString(SIGNAL_TOPIC);
         this.pollTimeoutMs = Duration.ofMillis(signalConfig.getInteger(SIGNAL_POLL_TIMEOUT_MS));
         Configuration consumerConfig = buildKafkaConfiguration(signalConfig);
@@ -162,7 +173,6 @@ public class KafkaSignalChannel implements SignalChannelReader {
                 .withDefault(ConsumerConfig.CLIENT_ID_CONFIG, UUID.randomUUID().toString())
                 .withDefault(ConsumerConfig.GROUP_ID_CONFIG, signalConfig.getString(GROUP_ID))
                 .withDefault(ConsumerConfig.FETCH_MIN_BYTES_CONFIG, 1) // get even the smallest message
-                .withDefault(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false)
                 .withDefault(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 10000) // readjusted since 0.10.1.0
                 .withDefault(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class)
                 .withDefault(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class)
@@ -177,8 +187,7 @@ public class KafkaSignalChannel implements SignalChannelReader {
     public List<SignalRecord> read() {
 
         LOGGER.debug("Reading signal form kafka");
-        // DBZ-1361 not using poll(Duration) to keep compatibility with AK 1.x
-        ConsumerRecords<String, String> recoveredRecords = signalsConsumer.poll(pollTimeoutMs.toMillis());
+        ConsumerRecords<String, String> recoveredRecords = signalsConsumer.poll(pollTimeoutMs);
 
         return StreamSupport.stream(recoveredRecords.spliterator(), false)
                 .map(this::processSignal)

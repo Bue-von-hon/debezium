@@ -44,6 +44,7 @@ import io.debezium.heartbeat.Heartbeat;
 import io.debezium.heartbeat.HeartbeatConnectionProvider;
 import io.debezium.heartbeat.HeartbeatErrorHandler;
 import io.debezium.heartbeat.HeartbeatImpl;
+import io.debezium.openlineage.OpenLineageConfig;
 import io.debezium.pipeline.ErrorHandler;
 import io.debezium.pipeline.notification.channels.SinkNotificationChannel;
 import io.debezium.pipeline.txmetadata.DefaultTransactionMetadataFactory;
@@ -565,7 +566,9 @@ public abstract class CommonConnectorConfig {
     private static final String CONFLUENT_AVRO_CONVERTER = "io.confluent.connect.avro.AvroConverter";
     private static final String APICURIO_AVRO_CONVERTER = "io.apicurio.registry.utils.converter.AvroConverter";
 
-    public static final long EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 90;
+    // This should be less than the value of worker config task.shutdown.graceful.timeout.ms. It
+    // defaults to 5 seconds, hence setting it to 4 seconds.
+    public static final long EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 4;
     public static final int DEFAULT_MAX_QUEUE_SIZE = 8192;
     public static final int DEFAULT_MAX_BATCH_SIZE = 2048;
     public static final int DEFAULT_QUERY_FETCH_SIZE = 0;
@@ -576,6 +579,7 @@ public abstract class CommonConnectorConfig {
     public static final long DEFAULT_RETRIABLE_RESTART_WAIT = 10000L;
     public static final long DEFAULT_MAX_QUEUE_SIZE_IN_BYTES = 0; // In case we don't want to pass max.queue.size.in.bytes;
     public static final String NOTIFICATION_CONFIGURATION_FIELD_PREFIX_STRING = "notification.";
+    public static final long DEFAULT_CONNECTION_VALIDATION_TIMEOUT_MS = 60000L; // 60 seconds default timeout
 
     public static final int DEFAULT_MAX_RETRIES = ErrorHandler.RETRIES_UNLIMITED;
     public static final String ERRORS_MAX_RETRIES = "errors.max.retries";
@@ -1086,6 +1090,16 @@ public abstract class CommonConnectorConfig {
             .optional()
             .withDescription("When enabled the connector will emit advanced streaming metrics");
 
+    public static final Field CONNECTION_VALIDATION_TIMEOUT_MS = Field.create("connection.validation.timeout.ms")
+            .withDisplayName("Connection validation timeout (ms)")
+            .withType(Type.LONG)
+            .withGroup(Field.createGroupEntry(Field.Group.CONNECTION, 13))
+            .withWidth(Width.SHORT)
+            .withImportance(Importance.LOW)
+            .withDefault(DEFAULT_CONNECTION_VALIDATION_TIMEOUT_MS)
+            .withDescription("The maximum time in milliseconds to wait for connection validation to complete. Defaults to 60 seconds.")
+            .withValidation(Field::isPositiveLong);
+
     protected static final ConfigDefinition CONFIG_DEFINITION = ConfigDefinition.editor()
             .connector(
                     EVENT_PROCESSING_FAILURE_HANDLING_MODE,
@@ -1111,7 +1125,14 @@ public abstract class CommonConnectorConfig {
                     MAX_RETRIES_ON_ERROR,
                     INCREMENTAL_SNAPSHOT_WATERMARKING_STRATEGY,
                     LOG_POSITION_CHECK_ENABLED,
-                    ADVANCED_METRICS_ENABLE)
+                    ADVANCED_METRICS_ENABLE,
+                    CONNECTION_VALIDATION_TIMEOUT_MS,
+                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_ENABLED,
+                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_CONFIG_FILE_PATH,
+                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_NAMESPACE,
+                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_DESCRIPTION,
+                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_TAGS,
+                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_OWNERS)
             .events(
                     CUSTOM_CONVERTERS,
                     CUSTOM_POST_PROCESSORS,
@@ -1595,6 +1616,10 @@ public abstract class CommonConnectorConfig {
 
     public boolean isAdvancedMetricsEnabled() {
         return isAdvancedMetricsEnabled;
+    }
+
+    public Duration getConnectionValidationTimeout() {
+        return Duration.ofMillis(config.getLong(CONNECTION_VALIDATION_TIMEOUT_MS));
     }
 
     public EnumeratedValue snapshotQueryMode() {

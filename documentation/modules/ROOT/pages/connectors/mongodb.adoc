@@ -333,7 +333,7 @@ ifdef::community[]
 |The `custom` snapshot mode lets you inject your own implementation of the `io.debezium.spi.snapshot.Snapshotter` interface.
 Set the `snapshot.mode.custom.name` configuration property to the name provided by the `name()` method of your implementation.
 The name is specified on the classpath of your Kafka Connect cluster.
-If you use the {prodname} `EmbeddedEngine`, the name is included in the connector JAR file.
+If you use the {prodname} `DebeziumEngine`, the name is included in the connector JAR file.
 For more information, see xref:connector-custom-snapshot[custom snapshotter SPI].
 endif::community[]
 
@@ -1260,6 +1260,14 @@ endif::[]
 
 If you are working with immutable containers, see link:https://quay.io/organization/debezium[{prodname}'s Container images] for Apache Zookeeper, Apache Kafka, and Kafka Connect with the MongoDB connector already installed and ready to run.
 
+[IMPORTANT]
+====
+The {prodname} container images that you obtain from `quay.io` do not undergo rigorous testing or security analysis, and are provided for testing and evaluation purposes only.
+These images are not intended for use in production environments.
+To mitigate risk in production deployments, deploy only containers that are actively maintained by trusted vendors, and thoroughly tested for potential vulnerabilities.
+====
+
+
 You can also xref:operations/openshift.adoc[run {prodname} on Kubernetes and OpenShift].
 
 The {prodname} xref:tutorial.adoc[tutorial] walks you through using these images, and this is a great way to learn about {prodname}.
@@ -1271,7 +1279,9 @@ You can use either of the following methods to deploy a {prodname} MongoDB conne
 * xref:openshift-streams-mongodb-connector-deployment[Use {StreamsName} to automatically create an image that includes the connector plug-in].
 +
 This is the preferred method.
-* xref:deploying-debezium-mongodb-connectors[Build a custom Kafka Connect container image from a Dockerfile].
+* xref:deploying-debezium-mongodb-connectors[Build a custom Kafka Connect container image from a Dockerfile]. +
+This Containerfile deployment method is deprecated.
+The instructions for this method are scheduled for removal in future versions of the documentation.
 
 .Additional resources
 
@@ -1897,33 +1907,21 @@ To specify the number of bytes that the queue can consume, set this property to 
 If xref:mongodb-property-max-queue-size[`max.queue.size`] is also set, writing to the queue is blocked when the size of the queue reaches the limit specified by either property.
 For example, if you set `max.queue.size=1000`, and `max.queue.size.in.bytes=5000`, writing to the queue is blocked after the queue contains 1000 records, or after the volume of the records in the queue reaches 5000 bytes.
 
-|[[mongodb-property-poll-interval-ms]]<<mongodb-property-poll-interval-ms, `+poll.interval.ms+`>>
-|`1000`
-|Positive integer value that specifies the number of milliseconds the connector should wait during each iteration for new change events to appear. Defaults to 500 milliseconds, or 0.5 second.
-
-|[[mongodb-property-connect-backoff-initial-delay-ms]]<<mongodb-property-connect-backoff-initial-delay-ms, `+connect.backoff.initial.delay.ms+`>>
-|`1000`
-|Positive integer value that specifies the initial delay when trying to reconnect to a primary after the first failed connection attempt or when no primary is available. Defaults to 1 second (1000 ms).
-
-|[[mongodb-property-connect-backoff-max-delay-ms]]<<mongodb-property-connect-backoff-max-delay-ms, `+connect.backoff.max.delay.ms+`>>
-|`1000`
-|Positive integer value that specifies the maximum delay when trying to reconnect to a primary after repeated failed connection attempts or when no primary is available. Defaults to 120 seconds (120,000 ms).
-
 |[[mongodb-property-connect-max-attempts]]<<mongodb-property-connect-max-attempts, `+connect.max.attempts+`>>
 |`16`
 |Positive integer value that specifies the maximum number of failed connection attempts to a replica set primary before an exception occurs and task is aborted. Defaults to 16, which with the defaults for `connect.backoff.initial.delay.ms` and `connect.backoff.max.delay.ms` results in just over 20 minutes of attempts before failing.
 
-|[[mongodb-property-mongodb-ssl-keystore]]<<mongodb-property-ssl-keystore, `+mongodb.ssl.keystore+`>>
+|[[mongodb-property-ssl-keystore]]<<mongodb-property-ssl-keystore, `+mongodb.ssl.keystore+`>>
 |No Default
 |An optional setting that specifies the location of the key store file. A key store file can be used for two-way authentication between the client and the MongoDB server.
 
 |[[mongodb-property-mongodb-ssl-keystore-password]]<<mongodb-property-mongodb-ssl-keystore-password, `+mongodb.ssl.keystore.password+`>>
 |No Default
-|The password for the key store file. Specify a password only if the xref:mongodb-property-mongodb-ssl-keystore[`mongodb.ssl.keystore`] is configured.
+|The password for the key store file. Specify a password only if the xref:mongodb-property-ssl-keystore[`mongodb.ssl.keystore`] is configured.
 
 |[[mongodb-property-mongodb-ssl-keystore-type]]<<mongodb-property-mongodb-ssl-keystore-type, `+mongodb.ssl.keystore.type+`>>
 |No Default
-|The type of key store file. Specify a type only if the xref:mongodb-property-mongodb-ssl-keystore[`mongodb.ssl.keystore`] is configured.
+|The type of key store file. Specify a type only if the xref:mongodb-property-ssl-keystore[`mongodb.ssl.keystore`] is configured.
 
 |[[mongodb-property-mongodb-ssl-truststore]]<<mongodb-property-mongodb-ssl-truststore, `+mongodb.ssl.truststore+`>>
 |No Default

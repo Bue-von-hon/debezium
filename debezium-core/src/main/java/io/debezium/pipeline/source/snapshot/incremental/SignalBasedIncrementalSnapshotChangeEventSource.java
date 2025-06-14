@@ -6,6 +6,7 @@
 package io.debezium.pipeline.source.snapshot.incremental;
 
 import static io.debezium.config.CommonConnectorConfig.WatermarkStrategy.INSERT_DELETE;
+import static io.debezium.util.Loggings.maybeRedactSensitiveData;
 
 import java.sql.SQLException;
 import java.time.Instant;
@@ -57,7 +58,7 @@ public class SignalBasedIncrementalSnapshotChangeEventSource<P extends Partition
             LOGGER.warn("Context is null, skipping message processing");
             return;
         }
-        LOGGER.trace("Checking window for table '{}', key '{}', window contains '{}'", dataCollectionId, key, window);
+        LOGGER.trace("Checking window for table '{}', key '{}', window contains '{}'", dataCollectionId, maybeRedactSensitiveData(key), window);
         if (!window.isEmpty() && context.deduplicationNeeded()) {
             deduplicateWindow(dataCollectionId, key);
         }

@@ -50,6 +50,7 @@ import io.debezium.pipeline.spi.Partition;
 import io.debezium.pipeline.spi.SnapshotResult;
 import io.debezium.pipeline.spi.SnapshotResult.SnapshotResultStatus;
 import io.debezium.schema.DatabaseSchema;
+import io.debezium.schema.HistorizedDatabaseSchema;
 import io.debezium.snapshot.SnapshotterService;
 import io.debezium.spi.schema.DataCollectionId;
 import io.debezium.util.Clock;
@@ -138,6 +139,10 @@ public class ChangeEventSourceCoordinator<P extends Partition, O extends OffsetC
 
                     context = new ChangeEventSourceContextImpl();
                     LOGGER.info("Context created");
+
+                    if (schema.isHistorized() && ((HistorizedDatabaseSchema) schema).getSchemaHistory().exists()) {
+                        ((HistorizedDatabaseSchema<?>) schema).recover(previousOffsets);
+                    }
 
                     snapshotSource = changeEventSourceFactory.getSnapshotChangeEventSource(snapshotMetrics, notificationService);
                     executeChangeEventSources(taskContext, snapshotSource, previousOffsets, previousLogContext, context);
@@ -248,16 +253,13 @@ public class ChangeEventSourceCoordinator<P extends Partition, O extends OffsetC
 
                 SnapshottingTask snapshottingTask = snapshotSource.getBlockingSnapshottingTask(partition, (O) offsetContext, snapshotConfiguration);
                 try {
-                    SnapshotResult<O> snapshotResult = doSnapshot(snapshotSource, context, partition, (O) offsetContext, snapshottingTask);
-                    eventDispatcher.setEventListener(streamingMetrics);
-
-                    if (running && snapshotResult.isCompletedOrSkipped()) {
-                        resumeStreaming(partition);
-                    }
-
+                    doSnapshot(snapshotSource, context, partition, (O) offsetContext, snapshottingTask);
                 }
                 catch (Exception e) {
                     LOGGER.warn("Error while executing requested blocking snapshot.", e);
+                }
+                finally {
+                    eventDispatcher.setEventListener(streamingMetrics);
                     resumeStreaming(partition);
                 }
             }
@@ -311,18 +313,26 @@ public class ChangeEventSourceCoordinator<P extends Partition, O extends OffsetC
     }
 
     protected void streamEvents(ChangeEventSourceContext context, P partition, O offsetContext) throws InterruptedException {
-        initStreamEvents(partition, offsetContext);
-        getSignalProcessor(previousOffsets).ifPresent(signalProcessor -> registerSignalActionsAndStartProcessor(signalProcessor,
-                eventDispatcher, this, connectorConfig));
+        try {
+            initStreamEvents(partition, offsetContext);
+            getSignalProcessor(previousOffsets).ifPresent(signalProcessor -> registerSignalActionsAndStartProcessor(signalProcessor,
+                    eventDispatcher, this, connectorConfig));
 
-        if (snapshotterService != null && !snapshotterService.getSnapshotter().shouldStream()) {
-            LOGGER.info("Streaming is disabled for snapshot mode {}", snapshotterService.getSnapshotter().name());
-            return;
+            if (snapshotterService != null && !snapshotterService.getSnapshotter().shouldStream()) {
+                LOGGER.info("Streaming is disabled for snapshot mode {}", snapshotterService.getSnapshotter().name());
+                return;
+            }
+
+            LOGGER.info("Starting streaming");
+            streamingSource.execute(context, partition, offsetContext);
+            LOGGER.info("Finished streaming");
         }
-
-        LOGGER.info("Starting streaming");
-        streamingSource.execute(context, partition, offsetContext);
-        LOGGER.info("Finished streaming");
+        finally {
+            if (streamingSource != null) {
+                // Close streaming source
+                streamingSource.close();
+            }
+        }
     }
 
     protected void initStreamEvents(P partition, O offsetContext) throws InterruptedException {
@@ -341,8 +351,13 @@ public class ChangeEventSourceCoordinator<P extends Partition, O extends OffsetC
     }
 
     public void commitOffset(Map<String, ?> partition, Map<String, ?> offset) {
-        if (!commitOffsetLock.isLocked() && streamingSource != null && offset != null) {
-            streamingSource.commitOffset(partition, offset);
+        try {
+            if (!commitOffsetLock.isLocked() && streamingSource != null && offset != null) {
+                streamingSource.commitOffset(partition, offset);
+            }
+        }
+        catch (Throwable e) {
+            errorHandler.setProducerThrowable(e);
         }
     }
 
@@ -402,6 +417,8 @@ public class ChangeEventSourceCoordinator<P extends Partition, O extends OffsetC
 
     public class ChangeEventSourceContextImpl implements ChangeEventSourceContext {
 
+        private static final Duration PAUSE_BETWEEN_HEARTBEAT_CALLBACKS = Duration.ofSeconds(1);
+
         private final Lock lock = new ReentrantLock();
         private final Condition snapshotFinished = lock.newCondition();
         private final Condition streamingPaused = lock.newCondition();
@@ -430,13 +447,21 @@ public class ChangeEventSourceCoordinator<P extends Partition, O extends OffsetC
 
         @Override
         public void waitSnapshotCompletion() throws InterruptedException {
+            waitSnapshotCompletion(() -> {
+            });
+        }
+
+        @Override
+        public void waitSnapshotCompletion(Runnable heartbeatCallback) throws InterruptedException {
             lock.lock();
             try {
                 while (paused) {
                     LOGGER.trace("Waiting for snapshot to be completed.");
-                    snapshotFinished.await();
-                    streaming = true;
+                    if (!snapshotFinished.await(PAUSE_BETWEEN_HEARTBEAT_CALLBACKS.toNanos(), TimeUnit.NANOSECONDS)) {
+                        heartbeatCallback.run();
+                    }
                 }
+                streaming = true;
             }
             finally {
                 lock.unlock();

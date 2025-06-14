@@ -251,11 +251,13 @@ public interface SinkRecordFactory {
                 .source("ts_ms", (int) Instant.now().getEpochSecond())
                 .key("id", key);
 
-        SchemaBuilder recordSchema = SchemaBuilder.struct().field("id", Schema.INT8_SCHEMA);
+        SchemaBuilder recordSchemaBuilder = SchemaBuilder.struct().field("id", Schema.INT8_SCHEMA);
 
         for (int i = 0; i < fieldNames.size(); i++) {
-            recordSchema.field(fieldNames.get(i), fieldSchemas.get(i));
+            recordSchemaBuilder.field(fieldNames.get(i), fieldSchemas.get(i));
         }
+
+        Schema recordSchema = recordSchemaBuilder.build();
 
         basicSchemaBuilder.recordSchema(recordSchema);
 
@@ -452,6 +454,10 @@ public interface SinkRecordFactory {
                 .recordSchema(basicRecordSchema())
                 .sourceSchema(basicSourceSchema())
                 .build();
+    }
+
+    default KafkaDebeziumSinkRecord cloudEventRecord(String topicName, SerializerType serializerType) {
+        return cloudEventRecord(topicName, serializerType, null);
     }
 
     default KafkaDebeziumSinkRecord cloudEventRecord(String topicName, SerializerType serializerType, String cloudEventsSchemaName) {

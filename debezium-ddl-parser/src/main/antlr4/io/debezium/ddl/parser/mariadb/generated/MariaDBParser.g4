@@ -56,7 +56,7 @@ sqlStatement
     ;
 
 setStatementFor // setStatementFor is MariaDB-specific only
-    : SET STATEMENT ID EQUAL_SYMBOL constant (COMMA ID EQUAL_SYMBOL constant)* FOR
+    : SET STATEMENT simpleId EQUAL_SYMBOL constant (COMMA ID EQUAL_SYMBOL constant)* FOR
     ;
 
 emptyStatement_
@@ -535,16 +535,16 @@ tableOption
     | AUTO_INCREMENT '='? decimalLiteral                            # tableOptionAutoIncrement
     | AVG_ROW_LENGTH '='? decimalLiteral                            # tableOptionAverage
     | DEFAULT? charSet '='? (charsetName | DEFAULT)                 # tableOptionCharset
-    | (CHECKSUM | PAGE_CHECKSUM) '='? boolValue = ('0' | '1')       # tableOptionChecksum
+    | (CHECKSUM | PAGE_CHECKSUM) '='? booleanValue                  # tableOptionChecksum
     | DEFAULT? COLLATE '='? collationName                           # tableOptionCollate
     | COMMENT '='? STRING_LITERAL                                   # tableOptionComment
     | COMPRESSION '='? (STRING_LITERAL | ID)                        # tableOptionCompression
     | CONNECTION '='? STRING_LITERAL                                # tableOptionConnection
     | (DATA | INDEX) DIRECTORY '='? STRING_LITERAL                  # tableOptionDataDirectory
-    | DELAY_KEY_WRITE '='? boolValue = ('0' | '1')                  # tableOptionDelay
+    | DELAY_KEY_WRITE '='? booleanValue                             # tableOptionDelay
     | ENCRYPTION '='? STRING_LITERAL                                # tableOptionEncryption
     | encryptedLiteral '='? (YES | NO)                              # tableOptionEncrypted
-    | (PAGE_COMPRESSED | STRING_LITERAL) '='? ('0' | '1')           # tableOptionPageCompressed
+    | (PAGE_COMPRESSED | STRING_LITERAL) '='? booleanValue          # tableOptionPageCompressed
     | (PAGE_COMPRESSION_LEVEL | STRING_LITERAL) '='? decimalLiteral # tableOptionPageCompressionLevel
     | ENCRYPTION_KEY_ID '='? decimalLiteral                         # tableOptionEncryptionKeyId
     | INDEX DIRECTORY '='? STRING_LITERAL                           # tableOptionIndexDirectory
@@ -565,14 +565,15 @@ tableOption
     )                                                             # tableOptionRowFormat
     | START TRANSACTION                                           # tableOptionStartTransaction
     | SECONDARY_ENGINE_ATTRIBUTE '='? STRING_LITERAL              # tableOptionSecondaryEngineAttribute
-    | STATS_AUTO_RECALC '='? extBoolValue = (DEFAULT | '0' | '1') # tableOptionRecalculation
-    | STATS_PERSISTENT '='? extBoolValue = (DEFAULT | '0' | '1')  # tableOptionPersistent
+    | STATS_AUTO_RECALC '='? (DEFAULT | booleanValue)             # tableOptionRecalculation
+    | STATS_PERSISTENT '='? (DEFAULT | booleanValue)              # tableOptionPersistent
     | STATS_SAMPLE_PAGES '='? (DEFAULT | decimalLiteral)          # tableOptionSamplePage
     | TABLESPACE uid tablespaceStorage?                           # tableOptionTablespace
     | TABLE_TYPE '=' tableType                                    # tableOptionTableType
     | tablespaceStorage                                           # tableOptionTablespace
     | TRANSACTIONAL '='? ('0' | '1')                              # tableOptionTransactional
     | UNION '='? '(' tables ')'                                   # tableOptionUnion
+    | WITH SYSTEM VERSIONING                                      # tableOptionWithSystemVersioning // MariaDB-specific only
     ;
 
 tableType
@@ -595,6 +596,19 @@ partitionFunctionDefinition
     | LINEAR? KEY (ALGORITHM '=' algType = ('1' | '2'))? '(' uidList ')' # partitionFunctionKey
     | RANGE ('(' expression ')' | COLUMNS '(' uidList ')')               # partitionFunctionRange
     | LIST ('(' expression ')' | COLUMNS '(' uidList ')')                # partitionFunctionList
+    | SYSTEM_TIME (expression | LIMIT expression) (
+        STARTS (TIMESTAMP timestampValue | timestampValue)
+    )? AUTO? partitionSystemVersionDefinitions? # partitionSystemVersion // MariaDB-specific
+    ;
+
+// MariaDB-specific
+partitionSystemVersionDefinitions
+    : '(' partitionSystemVersionDefinition (',' partitionSystemVersionDefinition)* ')'
+    ;
+
+// MariaDB-specific
+partitionSystemVersionDefinition
+    : PARTITION uid (HISTORY | CURRENT)
     ;
 
 subpartitionFunctionDefinition
@@ -702,33 +716,35 @@ alterSequence // sequence is MariaDB-specific only
 // details
 
 alterSpecification
-    : tableOption (','? tableOption)*                                                                           # alterByTableOption
-    | ADD COLUMN? ifNotExists? uid columnDefinition (FIRST | AFTER uid)?                                        # alterByAddColumn // here ifNotExists is MariaDB-specific only
-    | ADD COLUMN? ifNotExists?                                                                                  // here ifNotExists is MariaDB-specific only
-    '(' uid columnDefinition (',' uid columnDefinition)* ')'                                                    # alterByAddColumns
-    | ADD indexFormat = (INDEX | KEY) ifNotExists? uid? indexType?                                              // here ifNotExists is MariaDB-specific only
-    indexColumnNames indexOption*                                                                               # alterByAddIndex
-    | ADD (CONSTRAINT name = uid?)? PRIMARY KEY index = uid? indexType? indexColumnNames indexOption*           # alterByAddPrimaryKey
-    | ADD (CONSTRAINT name = uid?)? UNIQUE indexFormat = (INDEX | KEY)? ifNotExists?                            // here ifNotExists is MariaDB-specific only
-    indexName = uid? indexType? indexColumnNames indexOption*                                                   #alterByAddUniqueKey
-    | ADD keyType = (FULLTEXT | SPATIAL) indexFormat = (INDEX | KEY)? uid? indexColumnNames indexOption*        # alterByAddSpecialIndex
-    | ADD (CONSTRAINT name = uid?)? FOREIGN KEY ifNotExists?                                                    // here ifNotExists is MariaDB-specific only
-    indexName = uid? indexColumnNames referenceDefinition                                                       # alterByAddForeignKey
-    | ADD (CONSTRAINT name = uid?)? CHECK '(' expression ')'                                                    # alterByAddCheckTableConstraint
-    | ALGORITHM '='? algType = (DEFAULT | INSTANT | INPLACE | COPY | NOCOPY)                                    # alterBySetAlgorithm
-    | ALTER COLUMN? uid (SET DEFAULT defaultValue | DROP DEFAULT)                                               # alterByChangeDefault
-    | CHANGE COLUMN? ifExists? oldColumn = uid                                                                  // here ifExists is MariaDB-specific only
-    newColumn = uid columnDefinition (FIRST | AFTER afterColumn = uid)?                                         # alterByChangeColumn
-    | RENAME COLUMN oldColumn = uid TO newColumn = uid                                                          # alterByRenameColumn
-    | LOCK '='? lockType = (DEFAULT | NONE | SHARED | EXCLUSIVE)                                                # alterByLock
-    | MODIFY COLUMN? ifExists?                                            // here ifExists is MariaDB-specific only
+    : tableOption (','? tableOption)*                                    # alterByTableOption
+    | ADD COLUMN? ifNotExists? uid columnDefinition (FIRST | AFTER uid)? # alterByAddColumn // here ifNotExists is MariaDB-specific only
+    | ADD COLUMN? ifNotExists?                                                              // here ifNotExists is MariaDB-specific only
+    '(' uid columnDefinition (',' uid columnDefinition)* ')' # alterByAddColumns
+    | ADD indexFormat = (INDEX | KEY) ifNotExists? uid? indexType? // here ifNotExists is MariaDB-specific only
+    indexColumnNames indexOption*                                                                                                              # alterByAddIndex
+    | ADD (CONSTRAINT name = uid?)? PRIMARY KEY index = uid? indexType? indexColumnNames indexOption*                                          # alterByAddPrimaryKey
+    | ADD (CONSTRAINT name = uid?)? UNIQUE indexFormat = (INDEX | KEY)? ifNotExists? indexName = uid? indexType? indexColumnNames indexOption* #
+        alterByAddUniqueKey
+    | ADD keyType = (FULLTEXT | SPATIAL) indexFormat = (INDEX | KEY)? uid? indexColumnNames indexOption* # alterByAddSpecialIndex
+    | ADD (CONSTRAINT name = uid?)? FOREIGN KEY ifNotExists? // here ifNotExists is MariaDB-specific only
+    indexName = uid? indexColumnNames referenceDefinition                    # alterByAddForeignKey
+    | ADD (CONSTRAINT name = uid?)? CHECK '(' expression ')'                 # alterByAddCheckTableConstraint
+    | ALGORITHM '='? algType = (DEFAULT | INSTANT | INPLACE | COPY | NOCOPY) # alterBySetAlgorithm
+    | ALTER COLUMN? uid (SET DEFAULT defaultValue | DROP DEFAULT)            # alterByChangeDefault
+    | CHANGE COLUMN? ifExists? oldColumn = uid // here ifExists is MariaDB-specific only
+    newColumn = uid columnDefinition (FIRST | AFTER afterColumn = uid)? # alterByChangeColumn
+    | RENAME COLUMN oldColumn = uid TO newColumn = uid                  # alterByRenameColumn
+    | LOCK '='? lockType = (DEFAULT | NONE | SHARED | EXCLUSIVE)        # alterByLock
+    | MODIFY COLUMN? ifExists? // here ifExists is MariaDB-specific only
     uid columnDefinition (FIRST | AFTER uid)?                             # alterByModifyColumn
     | DROP COLUMN? ifExists? uid RESTRICT?                                # alterByDropColumn          // here ifExists is MariaDB-specific only
     | DROP (CONSTRAINT | CHECK) ifExists? uid                             # alterByDropConstraintCheck // here ifExists is MariaDB-specific only
     | DROP PRIMARY KEY                                                    # alterByDropPrimaryKey
+    | ADD PRIMARY KEY ifNotExists? '(' uid ')'                            # alterByNotExistingPrimaryKey // MariaDB-specific only
     | DROP indexFormat = (INDEX | KEY) ifExists? uid                      # alterByDropIndex // here ifExists is MariaDB-specific only
     | RENAME indexFormat = (INDEX | KEY) uid TO uid                       # alterByRenameIndex
     | ALTER INDEX uid (VISIBLE | INVISIBLE)                               # alterByAlterIndexVisibility
+    | ALTER (KEY | INDEX) ifExists? uid NOT? IGNORED                      # alterByAlterIndexIgnore // MariaDB-specific only
     | DROP FOREIGN KEY ifExists? uid dottedId?                            # alterByDropForeignKey // here ifExists is MariaDB-specific only
     | DISABLE KEYS                                                        # alterByDisableKeys
     | ENABLE KEYS                                                         # alterByEnableKeys
@@ -740,9 +756,9 @@ alterSpecification
     | IMPORT TABLESPACE                                                   # alterByImportTablespace
     | FORCE                                                               # alterByForce
     | validationFormat = (WITHOUT | WITH) VALIDATION                      # alterByValidate
-    | ADD COLUMN? ifNotExists?                                            // here ifNotExists is MariaDB-specific only
-    '(' createDefinition (',' createDefinition)* ')'                      # alterByAddDefinitions
-    | alterPartitionSpecification                                         # alterPartition
+    | ADD COLUMN? ifNotExists? // here ifNotExists is MariaDB-specific only
+    '(' createDefinition (',' createDefinition)* ')' # alterByAddDefinitions
+    | alterPartitionSpecification                    # alterPartition
     ;
 
 alterPartitionSpecification
@@ -1636,6 +1652,7 @@ userResourceOption
     | MAX_UPDATES_PER_HOUR decimalLiteral
     | MAX_CONNECTIONS_PER_HOUR decimalLiteral
     | MAX_USER_CONNECTIONS decimalLiteral
+    | MAX_STATEMENT_TIME decimalLiteral
     ;
 
 userPasswordOption
@@ -1663,7 +1680,7 @@ privilege
     : ALL PRIVILEGES?
     | ALTER ROUTINE?
     | CREATE (TEMPORARY TABLES | ROUTINE | VIEW | USER | TABLESPACE | ROLE)?
-    | DELETE
+    | DELETE (HISTORY)? // HISTORY is MariaDB-specific
     | DROP (ROLE)?
     | EVENT
     | EXECUTE
@@ -2230,6 +2247,15 @@ booleanLiteral
     | FALSE
     ;
 
+booleanValue
+    : '0'
+    | '1'
+    | ON
+    | OFF
+    | STRING_LITERAL
+    ;
+
+
 hexadecimalLiteral
     : STRING_CHARSET_NAME? HEXADECIMAL_LITERAL
     ;
@@ -2305,6 +2331,7 @@ dataType
     )                                                                                  # spatialDataType
     | typeName = LONG VARCHAR? BINARY? (charSet charsetName)? (COLLATE collationName)? # longVarcharDataType // LONG VARCHAR is the same as LONG
     | LONG VARBINARY                                                                   # longVarbinaryDataType
+    | UUID                                                                             # uuidDataType // MariaDB-specific only
     ;
 
 collectionOptions
@@ -2990,6 +3017,7 @@ keywordsCanBeId
     | MAX
     | MAX_ROWS
     | MAX_SIZE
+    | MAX_STATEMENT_TIME
     | MAX_UPDATES_PER_HOUR
     | MAX_USER_CONNECTIONS
     | MEDIUM
@@ -3023,6 +3051,7 @@ keywordsCanBeId
     | OFFLINE
     | OFFSET
     | OF
+    | OFF
     | OJ
     | OLD_PASSWORD
     | ONE
@@ -3232,6 +3261,7 @@ keywordsCanBeId
     | SETVAL
     | SKIP_
     | STATEMENT
+    | UUID
     | VIA
     | MONITOR
     | READ_ONLY

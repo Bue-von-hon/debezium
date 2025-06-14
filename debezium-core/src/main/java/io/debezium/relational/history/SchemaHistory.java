@@ -69,8 +69,8 @@ public interface SchemaHistory {
             .withWidth(Width.SHORT)
             .withImportance(Importance.LOW)
             .withDescription("Controls what DDL will Debezium store in database schema history. "
-                    + "By default (true) only DDL that manipulates a table from captured schema/database will be stored. "
-                    + "If set to false, then Debezium will store all incoming DDL statements.")
+                    + "By default (false) Debezium will store all incoming DDL statements. "
+                    + "If set to true, then only DDL that manipulates a table from captured schema/database will be stored.")
             .withDefault(false);
 
     Field DDL_FILTER = Field.createInternal(CONFIGURATION_FIELD_PREFIX_STRING + "ddl.filter")
@@ -164,7 +164,7 @@ public interface SchemaHistory {
      * @deprecated Use {@link #recover(Offsets, Tables, DdlParser)} instead.
      */
     @Deprecated
-    default void recover(Map<String, ?> source, Map<String, ?> position, Tables schema, DdlParser ddlParser) {
+    default void recover(Map<String, ?> source, Map<String, ?> position, Tables schema, DdlParser ddlParser) throws InterruptedException {
         recover(Collections.singletonMap(source, position), schema, ddlParser);
     }
 
@@ -181,7 +181,7 @@ public interface SchemaHistory {
      *            may not be null
      * @param ddlParser the DDL parser that can be used to apply DDL statements to the given {@code schema}; may not be null
      */
-    default void recover(Offsets<?, ?> offsets, Tables schema, DdlParser ddlParser) {
+    default void recover(Offsets<?, ?> offsets, Tables schema, DdlParser ddlParser) throws InterruptedException {
         Map<Map<String, ?>, Map<String, ?>> offsetMap = new HashMap<>();
         for (Entry<? extends Partition, ? extends OffsetContext> entry : offsets) {
             if (entry.getValue() != null) {
@@ -196,7 +196,7 @@ public interface SchemaHistory {
      * @deprecated Use {@link #recover(Offsets, Tables, DdlParser)} instead.
      */
     @Deprecated
-    void recover(Map<Map<String, ?>, Map<String, ?>> offsets, Tables schema, DdlParser ddlParser);
+    void recover(Map<Map<String, ?>, Map<String, ?>> offsets, Tables schema, DdlParser ddlParser) throws InterruptedException;
 
     /**
      * Stop recording history and release any resources acquired since {@link #configure(Configuration, HistoryRecordComparator, SchemaHistoryListener, boolean)}.
@@ -219,4 +219,11 @@ public interface SchemaHistory {
      * Called to initialize permanent storage of the history.
      */
     void initializeStorage();
+
+    /**
+     * Validates that the underlying storage is configured as needed by the specific implementation.
+     */
+    default void checkStorageSettings() {
+        return;
+    }
 }

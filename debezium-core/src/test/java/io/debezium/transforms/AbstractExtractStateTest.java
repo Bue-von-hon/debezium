@@ -34,8 +34,6 @@ import io.debezium.util.Collect;
 public abstract class AbstractExtractStateTest {
 
     // for ExtractNewRecordState
-    protected static final String DROP_TOMBSTONES = "drop.tombstones";
-    protected static final String HANDLE_DELETES = "delete.handling.mode";
     protected static final String HANDLE_TOMBSTONE_DELETES = "delete.tombstone.handling.mode";
     protected static final String ROUTE_BY_FIELD = "route.by.field";
     protected static final String ADD_FIELDS = "add.fields";
@@ -45,6 +43,7 @@ public abstract class AbstractExtractStateTest {
     protected static final String DROP_FIELDS_HEADER_NAME = "drop.fields.header.name";
     protected static final String DROP_FIELDS_FROM_KEY = "drop.fields.from.key";
     protected static final String DROP_FIELDS_KEEP_SCHEMA_COMPATIBLE = "drop.fields.keep.schema.compatible";
+    protected static final String REPLACE_NULL_WITH_DEFAULT = "replace.null.with.default";
 
     Schema idSchema = SchemaBuilder
             .int8()

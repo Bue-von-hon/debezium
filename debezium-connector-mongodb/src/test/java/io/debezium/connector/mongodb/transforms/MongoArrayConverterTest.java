@@ -8,12 +8,13 @@ package io.debezium.connector.mongodb.transforms;
 import static io.debezium.connector.mongodb.TestHelper.lines;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.Map.Entry;
+import java.util.Map;
 
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
 import org.bson.BsonDocument;
+import org.bson.BsonType;
 import org.bson.BsonValue;
 import org.junit.Before;
 import org.junit.Test;
@@ -29,63 +30,110 @@ import io.debezium.doc.FixFor;
  */
 public class MongoArrayConverterTest {
 
-    private static final String HETEROGENOUS_ARRAY = lines(
-            "{",
-            "    \"_id\": 1,",
-            "    \"a2\": [",
-            "        11,",
-            "        \"abc\"",
-            "    ]",
-            "}");
+    private static final String HETEROGENEOUS_ARRAY = lines("""
+            {
+              "_id": 1,
+              "a2": [
+                11,
+                "abc"
+              ]
+            }""");
 
-    private static final String EMPTY_ARRAY = lines(
-            "{",
-            "    \"_id\": 1,",
-            "    \"f\": []",
-            "}");
+    private static final String EMPTY_ARRAY = lines("""
+            {
+              "_id": 1,
+              "f": []
+            }""");
 
-    private static final String HETEROGENOUS_DOCUMENT_IN_ARRAY = lines(
-            "{",
-            "    \"_id\": 1,",
-            "    \"a1\": [",
-            "        {",
-            "            \"a\": 1",
-            "        },",
-            "        {",
-            "            \"a\": \"c\"",
-            "        }",
-            "    ],",
-            "}");
+    private static final String HETEROGENEOUS_DOCUMENT_IN_ARRAY = lines("""
+            {
+              "_id": 1,
+              "a1": [
+                {
+                  "a": 1
+                },
+                {
+                  "a": "c"
+                }
+              ]
+            }""");
 
-    private static final String HOMOGENOUS_ARRAYS = lines(
-            "{",
-            "  \"_id\": 1,",
-            "  \"a1\": [",
-            "      {",
-            "          \"a\": 1",
-            "      },",
-            "      {",
-            "          \"b\": \"c\"",
-            "      }",
-            "  ],",
-            "  \"a2\": [",
-            "      \"11\",",
-            "      \"abc\"",
-            "  ],",
-            "  \"empty\": [],",
-            "  \"additionalContacts\": [",
-            "    {",
-            "      \"firstName\": \"John\",",
-            "      \"lastName\": \"Doe\",",
-            "      \"comment\": null",
-            "    },",
-            "    {",
-            "      \"firstName\": \"Jane\",",
-            "      \"lastName\": \"Doe\",",
-            "      \"comment\": \"A comment\"",
-            "    }",
-            "  ]",
-            "}");
+    private static final String HOMOGENOUS_ARRAYS = lines("""
+            {
+              "_id": 1,
+              "a1": [
+                {
+                  "a": 1
+                },
+                {
+                  "b": "c"
+                }
+              ],
+              "a2": [
+                "11",
+                "abc"
+              ],
+              "empty": [],
+              "additionalContacts": [
+                {
+                  "firstName": "John",
+                  "lastName": "Doe",
+                  "comment": null
+                },
+                {
+                  "firstName": "Jane",
+                  "lastName": "Doe",
+                  "comment": "A comment"
+                }
+              ]
+            }""");
+
+    private static final String NESTED_DOCUMENT = lines("""
+            {
+              "pipeline": [
+                {
+                  "stageId": 1,
+                  "componentList": [
+                    {
+                      "componentId": 1,
+                      "action": "deploy"
+                    }
+                  ]
+                }
+              ]
+            }""");
+
+    private static final String NESTED_SUB_DOCUMENT = lines("""
+            {
+              "pipeline": [
+                {
+                  "stageId": 1,
+                  "componentList": [
+                    {
+                      "componentId": 1,
+                      "action": "deploy"
+                    },
+                    {
+                      "componentId": 2,
+                      "action": "deploy"
+                    }
+                  ]
+                },
+                {
+                  "stageId": 2,
+                  "componentList": [
+                    {
+                      "componentId": 3,
+                      "action": "deploy"
+                    },
+                    {
+                      "componentId": 4,
+                      "action": "deploy"
+                    }
+                  ]
+                }
+              ]
+            }""");
 
     private SchemaBuilder builder;
 
@@ -97,19 +145,17 @@ public class MongoArrayConverterTest {
     @Test(expected = DebeziumException.class)
     public void shouldDetectHeterogenousArray() throws Exception {
         final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.ARRAY);
-        final BsonDocument val = BsonDocument.parse(HETEROGENOUS_ARRAY);
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            converter.addFieldSchema(entry, builder);
-        }
+        final BsonDocument val = BsonDocument.parse(HETEROGENEOUS_ARRAY);
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
     }
 
     @Test(expected = DebeziumException.class)
     public void shouldDetectHeterogenousDocumentInArray() throws Exception {
         final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.ARRAY);
-        final BsonDocument val = BsonDocument.parse(HETEROGENOUS_DOCUMENT_IN_ARRAY);
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            converter.addFieldSchema(entry, builder);
-        }
+        final BsonDocument val = BsonDocument.parse(HETEROGENEOUS_DOCUMENT_IN_ARRAY);
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
     }
 
     @Test
@@ -117,9 +163,10 @@ public class MongoArrayConverterTest {
     public void shouldCreateSchemaForHomogenousArray() throws Exception {
         final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.ARRAY);
         final BsonDocument val = BsonDocument.parse(HOMOGENOUS_ARRAYS);
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            converter.addFieldSchema(entry, builder);
-        }
+
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
+
         final Schema finalSchema = builder.build();
 
         assertThat(finalSchema)
@@ -142,36 +189,51 @@ public class MongoArrayConverterTest {
 
     @Test
     @FixFor("DBZ-6760")
-    public void shouldCreateStructForHomogenousArray() throws Exception {
+    public void shouldCreateStructForHomogenousArray() {
         final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.ARRAY);
         final BsonDocument val = BsonDocument.parse(HOMOGENOUS_ARRAYS);
         final SchemaBuilder builder = SchemaBuilder.struct().name("array");
 
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            converter.addFieldSchema(entry, builder);
-        }
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
 
         final Schema finalSchema = builder.build();
         final Struct struct = new Struct(finalSchema);
-
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            converter.convertRecord(entry, finalSchema, struct);
+        for (Map.Entry<String, BsonValue> bsonValueEntry : val.entrySet()) {
+            converter.buildStruct(bsonValueEntry, finalSchema, struct);
         }
 
         // @formatter:off
-        assertThat(struct.toString()).isEqualTo(
-                "Struct{" +
-                        "_id=1," +
-                        "a1=[" +
-                            "Struct{a=1}, " +
-                            "Struct{b=c}" +
-                        "]," +
-                        "a2=[11, abc]," +
-                        "empty=[]," +
-                        "additionalContacts=[" +
-                            "Struct{firstName=John,lastName=Doe}, " +
-                            "Struct{firstName=Jane,lastName=Doe,comment=A comment}" +
-                        "]}");
+        String expectedStruct = """
+                Struct{
+                    _id=1,
+                    a1=[
+                        Struct{
+                            a=1
+                        },
+                        Struct{
+                            b=c
+                        }
+                    ],
+                    a2=[
+                        11,
+                        abc
+                    ],
+                    empty=[],
+                    additionalContacts=[
+                        Struct{
+                            firstName=John,
+                            lastName=Doe
+                        },
+                        Struct{
+                            firstName=Jane,
+                            lastName=Doe,
+                            comment=A comment
+                        }
+                    ]
+                }""";
+
+        assertThat(struct.toString()).isEqualToIgnoringWhitespace(expectedStruct);
         // @formatter:on
     }
 
@@ -180,9 +242,9 @@ public class MongoArrayConverterTest {
         final BsonDocument val = BsonDocument.parse(EMPTY_ARRAY);
 
         final MongoDataConverter arrayConverter = new MongoDataConverter(ArrayEncoding.ARRAY);
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            arrayConverter.addFieldSchema(entry, builder);
-        }
+        Map<String, Map<Object, BsonType>> entry = arrayConverter.parseBsonDocument(val);
+        arrayConverter.buildSchema(entry, builder);
+
         final Schema arraySchema = builder.build();
 
         assertThat(arraySchema)
@@ -194,38 +256,36 @@ public class MongoArrayConverterTest {
     }
 
     @Test
-    public void shouldCreateStructForEmptyArrayEncodingArray() throws Exception {
+    public void shouldCreateStructForEmptyArrayEncodingArray() {
         final BsonDocument val = BsonDocument.parse(EMPTY_ARRAY);
 
         final MongoDataConverter arrayConverter = new MongoDataConverter(ArrayEncoding.ARRAY);
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            arrayConverter.addFieldSchema(entry, builder);
-        }
+        Map<String, Map<Object, BsonType>> entry = arrayConverter.parseBsonDocument(val);
+        arrayConverter.buildSchema(entry, builder);
         final Schema arraySchema = builder.build();
 
         final Struct struct = new Struct(arraySchema);
-
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            arrayConverter.convertRecord(entry, arraySchema, struct);
+        for (Map.Entry<String, BsonValue> bsonValueEntry : val.entrySet()) {
+            arrayConverter.buildStruct(bsonValueEntry, arraySchema, struct);
         }
 
         // @formatter:off
-        assertThat(struct.toString()).isEqualTo(
-                "Struct{" +
-                        "_id=1," +
-                        "f=[]" +
-                "}");
+        assertThat(struct.toString()).isEqualToIgnoringWhitespace("""
+                Struct{
+                    _id=1,
+                    f=[]
+                }""");
         // @formatter:on
     }
 
     @Test
-    public void shouldCreateSchemaForEmptyArrayEncodingDocument() throws Exception {
+    public void shouldCreateSchemaForEmptyArrayEncodingDocument() {
         final BsonDocument val = BsonDocument.parse(EMPTY_ARRAY);
 
         final MongoDataConverter documentConverter = new MongoDataConverter(ArrayEncoding.DOCUMENT);
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            documentConverter.addFieldSchema(entry, builder);
-        }
+        Map<String, Map<Object, BsonType>> entry = documentConverter.parseBsonDocument(val);
+        documentConverter.buildSchema(entry, builder);
+
         final Schema documentSchema = builder.build();
 
         assertThat(documentSchema)
@@ -237,34 +297,36 @@ public class MongoArrayConverterTest {
     }
 
     @Test
-    public void shouldCreateStructForEmptyArrayEncodingDocument() throws Exception {
+    public void shouldCreateStructForEmptyArrayEncodingDocument() {
         final BsonDocument val = BsonDocument.parse(EMPTY_ARRAY);
 
         final MongoDataConverter documentConverter = new MongoDataConverter(ArrayEncoding.DOCUMENT);
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            documentConverter.addFieldSchema(entry, builder);
-        }
+        Map<String, Map<Object, BsonType>> entry = documentConverter.parseBsonDocument(val);
+        documentConverter.buildSchema(entry, builder);
+
         final Schema documentSchema = builder.build();
 
         final Struct struct = new Struct(documentSchema);
-
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            documentConverter.convertRecord(entry, documentSchema, struct);
+        for (Map.Entry<String, BsonValue> bsonValueEntry : val.entrySet()) {
+            documentConverter.buildStruct(bsonValueEntry, documentSchema, struct);
         }
 
-        assertThat(struct.toString()).isEqualTo(
-                "Struct{" +
-                        "_id=1," +
-                        "f=Struct{}}");
+        assertThat(struct.toString()).isEqualToIgnoringWhitespace("""
+                Struct{
+                    _id=1,
+                    f=Struct{}
+                }""");
+
     }
 
     @Test
-    public void shouldCreateSchemaForHeterogenousArray() throws Exception {
+    public void shouldCreateSchemaForHeterogeneousArray() {
         final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.DOCUMENT);
-        final BsonDocument val = BsonDocument.parse(HETEROGENOUS_ARRAY);
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            converter.addFieldSchema(entry, builder);
-        }
+        final BsonDocument val = BsonDocument.parse(HETEROGENEOUS_ARRAY);
+
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
+
         final Schema finalSchema = builder.build();
 
         assertThat(finalSchema)
@@ -279,33 +341,36 @@ public class MongoArrayConverterTest {
     }
 
     @Test
-    public void shouldCreateStructForHeterogenousArray() throws Exception {
+    public void shouldCreateStructForHeterogeneousArray() {
         final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.DOCUMENT);
-        final BsonDocument val = BsonDocument.parse(HETEROGENOUS_ARRAY);
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            converter.addFieldSchema(entry, builder);
-        }
+        final BsonDocument val = BsonDocument.parse(HETEROGENEOUS_ARRAY);
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
+
         final Schema finalSchema = builder.build();
 
         final Struct struct = new Struct(finalSchema);
-
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            converter.convertRecord(entry, finalSchema, struct);
+        for (Map.Entry<String, BsonValue> bsonValueEntry : val.entrySet()) {
+            converter.buildStruct(bsonValueEntry, finalSchema, struct);
         }
 
-        assertThat(struct.toString()).isEqualTo(
-                "Struct{" +
-                        "_id=1," +
-                        "a2=Struct{_0=11,_1=abc}}");
+        assertThat(struct.toString()).isEqualToIgnoringWhitespace("""
+                Struct{
+                    _id=1,
+                    a2=Struct{
+                        _0=11,
+                        _1=abc
+                    }
+                }""");
     }
 
     @Test
-    public void shouldCreateSchemaForHeterogenousDocumentInArray() throws Exception {
+    public void shouldCreateSchemaForHeterogeneousDocumentInArray() {
         final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.DOCUMENT);
-        final BsonDocument val = BsonDocument.parse(HETEROGENOUS_DOCUMENT_IN_ARRAY);
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            converter.addFieldSchema(entry, builder);
-        }
+        final BsonDocument val = BsonDocument.parse(HETEROGENEOUS_DOCUMENT_IN_ARRAY);
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
+
         final Schema finalSchema = builder.build();
 
         assertThat(finalSchema)
@@ -324,29 +389,204 @@ public class MongoArrayConverterTest {
     }
 
     @Test
-    public void shouldCreateStructForHeterogenousDocumentInArray() throws Exception {
+    public void shouldCreateStructForHeterogeneousDocumentInArray() {
         final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.DOCUMENT);
-        final BsonDocument val = BsonDocument.parse(HETEROGENOUS_DOCUMENT_IN_ARRAY);
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            converter.addFieldSchema(entry, builder);
-        }
+        final BsonDocument val = BsonDocument.parse(HETEROGENEOUS_DOCUMENT_IN_ARRAY);
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
         final Schema finalSchema = builder.build();
 
         final Struct struct = new Struct(finalSchema);
-
-        for (Entry<String, BsonValue> entry : val.entrySet()) {
-            converter.convertRecord(entry, finalSchema, struct);
+        for (Map.Entry<String, BsonValue> bsonValueEntry : val.entrySet()) {
+            converter.buildStruct(bsonValueEntry, finalSchema, struct);
         }
 
         // @formatter:off
-        assertThat(struct.toString()).isEqualTo(
-                "Struct{" +
-                        "_id=1," +
-                        "a1=Struct{" +
-                            "_0=Struct{a=1}," +
-                            "_1=Struct{a=c}" +
-                        "}" +
-                "}");
+        String expectedStruct = """
+                Struct{
+                    _id=1,
+                    a1=Struct{
+                        _0=Struct{a=1},
+                        _1=Struct{a=c}
+                    }
+                }""";
+
+        assertThat(struct.toString()).isEqualToIgnoringWhitespace(expectedStruct);
         // @formatter:on
+    }
+
+    @Test
+    public void shouldCreateSchemaForNestedDocumentForArrayEncoding() {
+        final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.ARRAY);
+        final BsonDocument val = BsonDocument.parse(NESTED_DOCUMENT);
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
+
+        final Schema finalSchema = builder.build();
+        final Struct struct = new Struct(finalSchema);
+        for (Map.Entry<String, BsonValue> bsonValueEntry : val.entrySet()) {
+            converter.buildStruct(bsonValueEntry, finalSchema, struct);
+        }
+
+        final String expectedStruct = """
+                Struct{
+                    pipeline=[
+                        Struct{
+                            stageId=1,
+                            componentList=[
+                                Struct{
+                                    componentId=1,
+                                    action=deploy
+                                }
+                            ]
+                        }
+                    ]
+                }""";
+
+        assertThat(struct.toString()).isEqualToIgnoringWhitespace(expectedStruct);
+    }
+
+    @Test
+    public void shouldCreateSchemaForNestedDocumentForDocumentEncoding() {
+        final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.DOCUMENT);
+        final BsonDocument val = BsonDocument.parse(NESTED_DOCUMENT);
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
+
+        final Schema finalSchema = builder.build();
+
+        final Schema expectedSchema = SchemaBuilder.struct().name("array")
+                .field("pipeline", SchemaBuilder.struct().name("array.pipeline").optional()
+                        .field("_0", SchemaBuilder.struct().name("array.pipeline._0").optional()
+                                .field("stageId", Schema.OPTIONAL_INT32_SCHEMA)
+                                .field("componentList", SchemaBuilder.struct().name("array.pipeline._0.componentList").optional()
+                                        .field("_0", SchemaBuilder.struct().name("array.pipeline._0.componentList._0").optional()
+                                                .field("componentId", Schema.OPTIONAL_INT32_SCHEMA)
+                                                .field("action", Schema.OPTIONAL_STRING_SCHEMA)
+                                                .build())
+                                        .build())
+                                .build())
+                        .build())
+                .build();
+
+        assertThat(finalSchema).isEqualTo(expectedSchema);
+
+        final Struct struct = new Struct(finalSchema);
+        for (Map.Entry<String, BsonValue> bsonValueEntry : val.entrySet()) {
+            converter.buildStruct(bsonValueEntry, finalSchema, struct);
+        }
+
+        final String expectedStruct = """
+                Struct{
+                    pipeline=Struct{
+                        _0=Struct{
+                            stageId=1,
+                            componentList=Struct{
+                                _0=Struct{
+                                    componentId=1,
+                                    action=deploy
+                                }
+                            }
+                        }
+                    }
+                }""";
+
+        assertThat(struct.toString()).isEqualToIgnoringWhitespace(expectedStruct);
+    }
+
+    @Test
+    public void shouldCreateSchemaForNestedSubDocumentForArrayEncoding() {
+        final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.ARRAY);
+        final BsonDocument val = BsonDocument.parse(NESTED_SUB_DOCUMENT);
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
+
+        final Schema finalSchema = builder.build();
+        final Struct struct = new Struct(finalSchema);
+        for (Map.Entry<String, BsonValue> bsonValueEntry : val.entrySet()) {
+            converter.buildStruct(bsonValueEntry, finalSchema, struct);
+        }
+
+        String expectedStruct = """
+                Struct{
+                    pipeline=[
+                        Struct{
+                            stageId=1,
+                            componentList=[
+                                Struct{
+                                    componentId=1,
+                                    action=deploy
+                                },
+                                Struct{
+                                    componentId=2,
+                                    action=deploy
+                                }
+                            ]
+                        },
+                        Struct{
+                            stageId=2,
+                            componentList=[
+                                Struct{
+                                    componentId=3,
+                                    action=deploy
+                                },
+                                Struct{
+                                    componentId=4,
+                                    action=deploy
+                                }
+                            ]
+                        }
+                    ]
+                }""";
+
+        assertThat(struct.toString()).isEqualToIgnoringWhitespace(expectedStruct);
+    }
+
+    @Test
+    public void shouldCreateSchemaForNestedSubDocumentForDocumentEncoding() {
+        final MongoDataConverter converter = new MongoDataConverter(ArrayEncoding.DOCUMENT);
+        final BsonDocument val = BsonDocument.parse(NESTED_SUB_DOCUMENT);
+        Map<String, Map<Object, BsonType>> entry = converter.parseBsonDocument(val);
+        converter.buildSchema(entry, builder);
+
+        final Schema finalSchema = builder.build();
+        final Struct struct = new Struct(finalSchema);
+        for (Map.Entry<String, BsonValue> bsonValueEntry : val.entrySet()) {
+            converter.buildStruct(bsonValueEntry, finalSchema, struct);
+        }
+
+        String expectedStruct = """
+                Struct{
+                    pipeline=Struct{
+                        _0=Struct{
+                            stageId=1,
+                            componentList=Struct{
+                                _0=Struct{
+                                    componentId=1,
+                                    action=deploy
+                                },
+                                _1=Struct{
+                                    componentId=2,
+                                    action=deploy
+                                }
+                            }
+                        },
+                        _1=Struct{
+                            stageId=2,
+                            componentList=Struct{
+                                _0=Struct{
+                                    componentId=3,
+                                    action=deploy
+                                },
+                                _1=Struct{
+                                    componentId=4,
+                                    action=deploy
+                                }
+                            }
+                        }
+                    }
+                }""";
+
+        assertThat(struct.toString()).isEqualToIgnoringWhitespace(expectedStruct);
     }
 }

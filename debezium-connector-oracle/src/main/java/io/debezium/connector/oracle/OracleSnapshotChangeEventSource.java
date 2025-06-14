@@ -9,6 +9,7 @@ import java.sql.SQLException;
 import java.sql.Savepoint;
 import java.sql.Statement;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -214,12 +215,13 @@ public class OracleSnapshotChangeEventSource extends RelationalSnapshotChangeEve
     @Override
     protected Instant getSnapshotSourceTimestamp(JdbcConnection jdbcConnection, OracleOffsetContext offset, TableId tableId) {
         try {
-            Optional<Instant> snapshotTs = ((OracleConnection) jdbcConnection).getScnToTimestamp(offset.getScn());
-            if (snapshotTs.isEmpty()) {
-                throw new ConnectException("Failed reading SCN timestamp from source database");
-            }
-
-            return snapshotTs.get();
+            final OracleConnection oracleConnection = (OracleConnection) jdbcConnection;
+            return oracleConnection.getScnToTimestamp(offset.getScn())
+                    .orElseThrow(() -> new ConnectException("Failed reading SCN timestamp from database"))
+                    // Database host timezone adjustment
+                    .minusSeconds(oracleConnection.getDatabaseSystemTime().getOffset().getTotalSeconds())
+                    // JVM timezone adjustment
+                    .plusSeconds(ZoneId.systemDefault().getRules().getOffset(Instant.now()).getTotalSeconds());
         }
         catch (SQLException e) {
             throw new ConnectException("Failed reading SCN timestamp from source database", e);
@@ -281,8 +283,8 @@ public class OracleSnapshotChangeEventSource extends RelationalSnapshotChangeEve
                                                               RelationalSnapshotContext<OraclePartition, OracleOffsetContext> snapshotContext,
                                                               EventDispatcher.SnapshotReceiver<OraclePartition> snapshotReceiver, Table table,
                                                               boolean firstTable, boolean lastTable, int tableOrder, int tableCount,
-                                                              String selectStatement, OptionalLong rowCount, Queue<JdbcConnection> connectionPool,
-                                                              Queue<OracleOffsetContext> offsets) {
+                                                              String selectStatement, OptionalLong rowCount, Set<TableId> rowCountKeySet,
+                                                              Queue<JdbcConnection> connectionPool, Queue<OracleOffsetContext> offsets) {
         return () -> {
             JdbcConnection connection = connectionPool.poll();
             OracleOffsetContext offset = offsets.poll();
@@ -291,7 +293,7 @@ public class OracleSnapshotChangeEventSource extends RelationalSnapshotChangeEve
                 for (int i = 0; i <= maxRetries; i++) {
                     try {
                         doCreateDataEventsForTable(sourceContext, snapshotContext, offset, snapshotReceiver, table, firstTable,
-                                lastTable, tableOrder, tableCount, selectStatement, rowCount, connection);
+                                lastTable, tableOrder, tableCount, selectStatement, rowCount, rowCountKeySet, connection);
                         break;
                     }
                     catch (SQLException e) {

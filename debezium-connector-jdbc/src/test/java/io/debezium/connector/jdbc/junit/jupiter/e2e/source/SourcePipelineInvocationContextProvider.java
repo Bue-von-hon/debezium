@@ -33,6 +33,7 @@ import org.junit.jupiter.api.extension.TestTemplateInvocationContext;
 import org.junit.jupiter.api.extension.TestTemplateInvocationContextProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.JdbcDatabaseContainer;
 import org.testcontainers.containers.KafkaContainer;
@@ -73,7 +74,7 @@ public class SourcePipelineInvocationContextProvider implements BeforeAllCallbac
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SourcePipelineInvocationContextProvider.class);
 
-    private static final String MYSQL_IMAGE_NAME = "quay.io/debezium/example-mysql";
+    private static final String MYSQL_IMAGE_NAME = "container-registry.oracle.com/mysql/community-server:9.0";
     private static final String MYSQL_USERNAME = "mysqluser";
     private static final String MYSQL_PASSWORD = "debezium";
 
@@ -221,10 +222,23 @@ public class SourcePipelineInvocationContextProvider implements BeforeAllCallbac
 
     private List<TemporalPrecisionMode> getTemporalPrecisionModes(Method method, SourceType sourceType) {
         if (isAnyAnnotationPresent(method, WithTemporalPrecisionMode.class)) {
+            final WithTemporalPrecisionMode annotation = method.getAnnotation(WithTemporalPrecisionMode.class);
+            final TemporalPrecisionMode[] includeList = annotation.include();
+            final TemporalPrecisionMode[] excludeList = annotation.exclude();
+            if (includeList.length > 0 && excludeList.length > 0) {
+                throw new IllegalStateException("Test '" + method.getName() +
+                        "' should only specify precision mode include or exclude but not both.");
+            }
             final List<TemporalPrecisionMode> result = new ArrayList<>();
             for (TemporalPrecisionMode temporalPrecisionMode : TemporalPrecisionMode.values()) {
                 if (TemporalPrecisionMode.ADAPTIVE == temporalPrecisionMode && SourceType.MYSQL == sourceType) {
                     // MySQL explicitly prohibits the use of adaptive so we only allow the other two in the matrix.
+                    continue;
+                }
+                if (includeList.length > 0 && Arrays.stream(includeList).noneMatch(p -> p == temporalPrecisionMode)) {
+                    continue;
+                }
+                else if (excludeList.length > 0 && Arrays.stream(excludeList).anyMatch(p -> p == temporalPrecisionMode)) {
                     continue;
                 }
                 result.add(temporalPrecisionMode);
@@ -335,7 +349,7 @@ public class SourcePipelineInvocationContextProvider implements BeforeAllCallbac
 
     @SuppressWarnings("resource")
     private KafkaContainer getKafkaContainer() {
-        return DebeziumKafkaContainer.defaultKafkaContainer(network).withNetworkAliases("kafka");
+        return DebeziumKafkaContainer.defaultKRaftContainer(network).withNetworkAliases("kafka");
     }
 
     @SuppressWarnings("resource")
@@ -358,7 +372,13 @@ public class SourcePipelineInvocationContextProvider implements BeforeAllCallbac
                         .withUsername(MYSQL_USERNAME)
                         .withPassword(MYSQL_PASSWORD)
                         .withNetworkAliases(sourceType.getValue())
-                        .withEnv("TZ", TestHelper.getSourceTimeZone());
+                        .withEnv("TZ", TestHelper.getSourceTimeZone())
+                        .withEnv("MYSQL_ROOT_PASSWORD", "debezium-rocks")
+                        .withClasspathResourceMapping(
+                                "database-init-scripts/mysql-source-init.sql",
+                                "docker-entrypoint-initdb.d/init.sql",
+                                BindMode.READ_ONLY)
+                        .withConfigurationOverride("mysql-conf");
                 if (TestHelper.isConnectionTimeZoneUsed()) {
                     container.withUrlParam("connectionTimeZone", TestHelper.getSourceTimeZone());
                 }
@@ -422,6 +442,9 @@ public class SourcePipelineInvocationContextProvider implements BeforeAllCallbac
             return List.of(SourceType.MYSQL, SourceType.POSTGRES, SourceType.SQLSERVER);
         }
         else {
+            if (sourceConnectors.equalsIgnoreCase("all")) {
+                return Arrays.stream(SourceType.values()).collect(Collectors.toList());
+            }
             return Arrays.stream(sourceConnectors.split(",")).map(SourceType::parse).collect(Collectors.toList());
         }
     }

@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.connector.SnapshotRecord;
 import io.debezium.connector.base.ChangeEventQueue;
+import io.debezium.connector.common.DebeziumHeaderProducer;
 import io.debezium.data.Envelope;
 import io.debezium.data.Envelope.Operation;
 import io.debezium.heartbeat.Heartbeat;
@@ -53,9 +54,10 @@ public class MysqlEventDispatcher<P extends Partition, T extends DataCollectionI
                                 ChangeEventCreator changeEventCreator,
                                 InconsistentSchemaHandler inconsistentSchemaHandler,
                                 EventMetadataProvider metadataProvider, Heartbeat heartbeat,
-                                SchemaNameAdjuster schemaNameAdjuster, SignalProcessor signalProcessor) {
+                                SchemaNameAdjuster schemaNameAdjuster, SignalProcessor signalProcessor,
+                                DebeziumHeaderProducer debeziumHeaderProducer) {
         super(connectorConfig, topicNamingStrategy, schema, queue, filter, changeEventCreator,
-                inconsistentSchemaHandler, metadataProvider, heartbeat, schemaNameAdjuster, signalProcessor);
+                inconsistentSchemaHandler, metadataProvider, heartbeat, schemaNameAdjuster, signalProcessor, debeziumHeaderProducer);
         this.schema = schema;
     }
 

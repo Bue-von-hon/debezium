@@ -38,6 +38,8 @@ import org.apache.kafka.common.config.ConfigDef.Type;
 import org.apache.kafka.common.config.ConfigDef.Width;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.config.ConfigValue;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import io.debezium.annotation.Immutable;
 import io.debezium.function.Predicates;
@@ -50,6 +52,7 @@ import io.debezium.util.Strings;
 @Immutable
 public final class Field {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(Field.class);
     public static final String INTERNAL_PREFIX = "internal.";
     private static final String EMPTY_STRING = "";
     private static final CharSequence SPACE = " ";
@@ -720,7 +723,7 @@ public final class Field {
      */
     public Field withDescription(String description) {
         return new Field(name(), displayName, type(), width, description, importance(), dependents,
-                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -731,7 +734,7 @@ public final class Field {
      */
     public Field withDisplayName(String displayName) {
         return new Field(name(), displayName, type(), width, description(), importance(), dependents,
-                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -741,7 +744,7 @@ public final class Field {
      */
     public Field withWidth(Width width) {
         return new Field(name(), displayName(), type(), width, description(), importance(), dependents,
-                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -751,7 +754,7 @@ public final class Field {
      */
     public Field withType(Type type) {
         return new Field(name(), displayName(), type, width(), description(), importance(), dependents,
-                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -776,7 +779,7 @@ public final class Field {
      * @return the new field; never null
      */
     public <T extends Enum<T>> Field withEnum(Class<T> enumType, T defaultOption) {
-        EnumRecommender<T> recommendator = new EnumRecommender<>(enumType);
+        EnumRecommender<T> recommendator = new EnumRecommender<>(enumType, defaultOption);
         Field result = withType(Type.STRING).withRecommender(recommendator).withValidation(recommendator)
                 .withAllowedValues(getEnumLiterals(enumType));
         // Not all enums support EnumeratedValue yet
@@ -793,23 +796,23 @@ public final class Field {
 
     public Field required() {
         return new Field(name(), displayName(), type(), width(), description(), importance, dependents,
-                defaultValueGenerator, validator, recommender, true, group, allowedValues)
+                defaultValueGenerator, validator, recommender, true, group, allowedValues, deprecatedAliases)
                 .withValidation(Field::isRequired);
     }
 
     public Field optional() {
         return new Field(name(), displayName(), type(), width(), description(), importance, dependents,
-                defaultValueGenerator, validator, recommender, false, group, allowedValues);
+                defaultValueGenerator, validator, recommender, false, group, allowedValues, deprecatedAliases);
     }
 
     public Field withGroup(GroupEntry group) {
         return new Field(name(), displayName(), type(), width(), description(), importance, dependents,
-                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     public Field withAllowedValues(java.util.Set<?> allowedValues) {
         return new Field(name(), displayName(), type(), width(), description(), importance, dependents,
-                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -819,7 +822,7 @@ public final class Field {
      */
     public Field withImportance(Importance importance) {
         return new Field(name(), displayName(), type(), width(), description(), importance, dependents,
-                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -829,7 +832,7 @@ public final class Field {
      */
     public Field withDependents(String... dependents) {
         return new Field(name(), displayName(), type(), width, description(), importance(),
-                Arrays.asList(dependents), defaultValueGenerator, validator, recommender, isRequired, group, allowedValues);
+                Arrays.asList(dependents), defaultValueGenerator, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -839,7 +842,7 @@ public final class Field {
      */
     public Field withDefault(String defaultValue) {
         return new Field(name(), displayName(), type(), width, description(), importance(), dependents,
-                () -> defaultValue, validator, recommender, isRequired, group, allowedValues);
+                () -> defaultValue, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -850,7 +853,7 @@ public final class Field {
      */
     public Field withDefault(boolean defaultValue) {
         return new Field(name(), displayName(), type(), width, description(), importance(), dependents,
-                () -> Boolean.valueOf(defaultValue), validator, recommender, isRequired, group, allowedValues);
+                () -> Boolean.valueOf(defaultValue), validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -860,7 +863,7 @@ public final class Field {
      */
     public Field withDefault(int defaultValue) {
         return new Field(name(), displayName(), type(), width, description(), importance(), dependents,
-                () -> defaultValue, validator, recommender, isRequired, group, allowedValues);
+                () -> defaultValue, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -871,7 +874,7 @@ public final class Field {
      */
     public Field withDefault(long defaultValue) {
         return new Field(name(), displayName(), type(), width, description(), importance(), dependents,
-                () -> defaultValue, validator, recommender, isRequired, group, allowedValues);
+                () -> defaultValue, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -883,7 +886,7 @@ public final class Field {
      */
     public Field withDefault(BooleanSupplier defaultValueGenerator) {
         return new Field(name(), displayName(), type(), width, description(), importance(), dependents,
-                defaultValueGenerator::getAsBoolean, validator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator::getAsBoolean, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -895,7 +898,7 @@ public final class Field {
      */
     public Field withDefault(IntSupplier defaultValueGenerator) {
         return new Field(name(), displayName(), type(), width, description(), importance(), dependents,
-                defaultValueGenerator::getAsInt, validator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator::getAsInt, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -907,7 +910,7 @@ public final class Field {
      */
     public Field withDefault(LongSupplier defaultValueGenerator) {
         return new Field(name(), displayName(), type(), width, description(), importance(), dependents,
-                defaultValueGenerator::getAsLong, validator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator::getAsLong, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -918,7 +921,7 @@ public final class Field {
      */
     public Field withRecommender(Recommender recommender) {
         return new Field(name(), displayName(), type(), width, description(), importance(), dependents,
-                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator, validator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     public Field withInvisibleRecommender() {
@@ -932,7 +935,7 @@ public final class Field {
      */
     public Field withNoValidation() {
         return new Field(name(), displayName(), type(), width, description(), importance(), dependents,
-                defaultValueGenerator, null, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator, null, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     /**
@@ -950,7 +953,7 @@ public final class Field {
             }
         }
         return new Field(name(), displayName(), type(), width(), description(), importance(), dependents,
-                defaultValueGenerator, actualValidator, recommender, isRequired, group, allowedValues);
+                defaultValueGenerator, actualValidator, recommender, isRequired, group, allowedValues, deprecatedAliases);
     }
 
     public Field withDeprecatedAliases(String... deprecatedAliases) {
@@ -960,7 +963,7 @@ public final class Field {
             actualValidator = Field::deprecatedFieldWarning;
         }
         else {
-            actualValidator.and(Field::deprecatedFieldWarning);
+            actualValidator = validator.and(Field::deprecatedFieldWarning);
         }
         return new Field(name(), displayName(), type(), width(), description(), importance(), dependents(),
                 defaultValueGenerator, actualValidator, recommender, isRequired, group, allowedValues, aliases);
@@ -1123,12 +1126,14 @@ public final class Field {
         private final List<Object> validValues;
         private final java.util.Set<String> literals;
         private final String literalsStr;
+        private final String defaultOption;
 
-        public EnumRecommender(Class<T> enumType) {
+        public EnumRecommender(Class<T> enumType, T defaultOption) {
             // Not all enums support EnumeratedValue yet
             this.literals = getEnumLiterals(enumType);
             this.validValues = Collections.unmodifiableList(new ArrayList<>(this.literals));
             this.literalsStr = Strings.join(", ", validValues);
+            this.defaultOption = defaultOption != null ? defaultOption.name().toLowerCase() : null;
         }
 
         @Override
@@ -1145,8 +1150,11 @@ public final class Field {
         public int validate(Configuration config, Field field, ValidationOutput problems) {
             String value = config.getString(field);
             if (value == null) {
-                problems.accept(field, value, "Value must be one of " + literalsStr);
-                return 1;
+                if (defaultOption != null) {
+                    problems.accept(field, value, "Value must be one of " + literalsStr);
+                    return 1;
+                }
+                return 0;
             }
             String trimmed = value.trim().toLowerCase();
             if (!literals.contains(trimmed)) {
@@ -1449,7 +1457,7 @@ public final class Field {
         if (!field.deprecatedAliases().isEmpty()) {
             for (String alias : field.deprecatedAliases()) {
                 if (config.hasKey(alias)) {
-                    problems.accept(field, null, "Warning: Using deprecated config option \"" + alias + "\".");
+                    LOGGER.warn("Using deprecated config option \"{}\".", alias);
                 }
             }
         }

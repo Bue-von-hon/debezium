@@ -5,7 +5,6 @@
  */
 package io.debezium.connector.oracle;
 
-import java.math.BigInteger;
 import java.sql.CallableStatement;
 import java.sql.Clob;
 import java.sql.DatabaseMetaData;
@@ -16,6 +15,7 @@ import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -38,8 +38,8 @@ import io.debezium.DebeziumException;
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Field;
 import io.debezium.connector.oracle.OracleConnectorConfig.ConnectorAdapter;
-import io.debezium.connector.oracle.logminer.LogFile;
 import io.debezium.connector.oracle.logminer.SqlUtils;
+import io.debezium.connector.oracle.util.OracleUtils;
 import io.debezium.jdbc.JdbcConfiguration;
 import io.debezium.jdbc.JdbcConnection;
 import io.debezium.pipeline.spi.OffsetContext;
@@ -119,33 +119,18 @@ public class OracleConnection extends JdbcConnection {
     }
 
     public void setSessionToPdb(String pdbName) {
-        Statement statement = null;
-
-        try {
-            statement = connection().createStatement();
-            statement.execute("alter session set container=" + pdbName);
-        }
-        catch (SQLException e) {
-            throw new RuntimeException(e);
-        }
-        finally {
-            if (statement != null) {
-                try {
-                    statement.close();
-                }
-                catch (SQLException e) {
-                    LOGGER.error("Couldn't close statement", e);
-                }
-            }
-        }
+        setContainerAs(pdbName);
     }
 
     public void resetSessionToCdb() {
-        Statement statement = null;
+        setContainerAs("cdb$root");
+    }
 
+    private void setContainerAs(String containerName) {
+        Statement statement = null;
         try {
             statement = connection().createStatement();
-            statement.execute("alter session set container=cdb$root");
+            statement.execute("alter session set container=" + containerName);
         }
         catch (SQLException e) {
             throw new RuntimeException(e);
@@ -262,8 +247,9 @@ public class OracleConnection extends JdbcConnection {
 
     @Override
     protected String resolveCatalogName(String catalogName) {
-        final String pdbName = config().getString("pdb.name");
-        return (!Strings.isNullOrEmpty(pdbName) ? pdbName : config().getString("dbname")).toUpperCase();
+        final String pdbName = OracleUtils.getObjectName(config().getString("pdb.name"));
+        final String databaseName = OracleUtils.getObjectName(config().getString("dbname"));
+        return !OracleUtils.isObjectNameNullOrEmpty(pdbName) ? pdbName : databaseName;
     }
 
     @Override
@@ -324,7 +310,8 @@ public class OracleConnection extends JdbcConnection {
                         ps.setString(2, tableId.table());
                     },
                     rs -> rs.next() ? rs.getInt(1) : 0) == 0) {
-                throw new NonRelationalTableException("Table " + tableId + " is not a relational table");
+                throw new NonRelationalTableException("Table " + tableId + " was not found in ALL_ALL_TABLES, " +
+                        "which could mean its a grant/permission issue or it's not a relational table.");
             }
 
             // The storage and segment attributes aren't necessary
@@ -580,6 +567,16 @@ public class OracleConnection extends JdbcConnection {
         }
     }
 
+    /**
+     * Get the database system time in the database system's time zone.
+     *
+     * @return the database system time
+     * @throws SQLException if a database exception occurred
+     */
+    public OffsetDateTime getDatabaseSystemTime() throws SQLException {
+        return singleOptionalValue("SELECT SYSTIMESTAMP FROM DUAL", rs -> rs.getObject(1, OffsetDateTime.class));
+    }
+
     public boolean isArchiveLogDestinationValid(String archiveDestinationName) throws SQLException {
         return prepareQueryAndMap("SELECT STATUS, TYPE FROM V$ARCHIVE_DEST_STATUS WHERE DEST_NAME=?",
                 st -> st.setString(1, archiveDestinationName),
@@ -654,35 +651,36 @@ public class OracleConnection extends JdbcConnection {
     public Map<String, Object> reselectColumns(Table table, List<String> columns, List<String> keyColumns, List<Object> keyValues, Struct source)
             throws SQLException {
         final TableId oracleTableId = new TableId(null, table.id().schema(), table.id().table());
-        final String commitScn = source.getString(SourceInfo.COMMIT_SCN_KEY);
-        if (Strings.isNullOrEmpty(commitScn)) {
-            final String query = String.format("SELECT %s FROM %s WHERE %s",
-                    columns.stream().map(this::quotedColumnIdString).collect(Collectors.joining(",")),
-                    quotedTableIdString(oracleTableId),
-                    keyColumns.stream().map(key -> key + "=?").collect(Collectors.joining(" AND ")));
-            return optionallyDoInContainer(() -> reselectColumns(query, oracleTableId, columns, keyValues));
+        if (source != null) {
+            final String commitScn = source.getString(SourceInfo.COMMIT_SCN_KEY);
+            if (!Strings.isNullOrEmpty(commitScn)) {
+                final String query = String.format("SELECT %s FROM (SELECT * FROM %s AS OF SCN ?) WHERE %s",
+                        columns.stream().map(this::quotedColumnIdString).collect(Collectors.joining(",")),
+                        quotedTableIdString(oracleTableId),
+                        keyColumns.stream().map(key -> key + "=?").collect(Collectors.joining(" AND ")));
+                final List<Object> bindValues = new ArrayList<>(keyValues.size() + 1);
+                bindValues.add(commitScn);
+                bindValues.addAll(keyValues);
+                try {
+                    return reselectColumns(query, oracleTableId, columns, bindValues);
+                }
+                catch (SQLException e) {
+                    // Check if the exception is about a flashback area error with an aged SCN
+                    if (!(e.getErrorCode() == 1555 || e.getMessage().startsWith("ORA-01555"))) {
+                        throw e;
+                    }
+                    LOGGER.warn("Failed to re-select row for table {} and key columns {} with values {}. " +
+                            "Trying to perform re-selection without flashback.", table.id(), keyColumns, keyValues);
+                }
+            }
         }
 
-        final String query = String.format("SELECT %s FROM (SELECT * FROM %s AS OF SCN ?) WHERE %s",
+        final String query = String.format("SELECT %s FROM %s WHERE %s",
                 columns.stream().map(this::quotedColumnIdString).collect(Collectors.joining(",")),
                 quotedTableIdString(oracleTableId),
                 keyColumns.stream().map(key -> key + "=?").collect(Collectors.joining(" AND ")));
-        final List<Object> bindValues = new ArrayList<>(keyValues.size() + 1);
-        bindValues.add(commitScn);
-        bindValues.addAll(keyValues);
-        return optionallyDoInContainer(() -> {
-            try {
-                return reselectColumns(query, oracleTableId, columns, bindValues);
-            }
-            catch (SQLException e) {
-                if (e.getErrorCode() == 1555 || e.getMessage().startsWith("ORA-01555")) {
-                    LOGGER.warn("Failed to re-select row for table {} and key columns {} with values {}. " +
-                            "Trying to perform re-selection without flashback.", table.id(), keyColumns, keyValues);
-                    return super.reselectColumns(table, columns, keyColumns, keyValues, source);
-                }
-                throw e;
-            }
-        });
+
+        return reselectColumns(query, oracleTableId, columns, keyValues);
     }
 
     @Override
@@ -712,23 +710,6 @@ public class OracleConnection extends JdbcConnection {
             }
             consumer.apply(rs.getLong(1), rs.getLong(2));
         });
-    }
-
-    private <T> T optionallyDoInContainer(ContainerWork<T> work) throws SQLException {
-        boolean swapped = false;
-        try {
-            final String pdbName = config().getString("pdb.name");
-            if (!Strings.isNullOrEmpty(pdbName)) {
-                setSessionToPdb(pdbName);
-                swapped = true;
-            }
-            return work.execute();
-        }
-        finally {
-            if (swapped) {
-                resetSessionToCdb();
-            }
-        }
     }
 
     public Long getTableObjectId(TableId tableId) throws SQLException {
@@ -869,33 +850,6 @@ public class OracleConnection extends JdbcConnection {
         }
     }
 
-    public LogFile getArchiveLogFile(int threadId, long sequenceId) {
-        try {
-            return prepareQueryAndMap(
-                    "SELECT NAME, FIRST_CHANGE#, NEXT_CHANGE#, SEQUENCE# FROM V$ARCHIVED_LOG WHERE THREAD#=? AND SEQUENCE#=?",
-                    ps -> {
-                        ps.setInt(1, threadId);
-                        ps.setLong(2, sequenceId);
-                    },
-                    rs -> {
-                        if (!rs.next()) {
-                            return null;
-                        }
-                        return new LogFile(
-                                rs.getString(1),
-                                Scn.valueOf(rs.getString(2)),
-                                Scn.valueOf(rs.getString(3)),
-                                BigInteger.valueOf(rs.getLong(4)),
-                                LogFile.Type.ARCHIVE,
-                                threadId);
-                    });
-        }
-        catch (SQLException e) {
-            LOGGER.warn("Failed to find archive log for redo thread {} and sequence {}", threadId, sequenceId, e);
-            return null;
-        }
-    }
-
     public String getDatabaseParameterValue(String parameterName) throws SQLException {
         final String query = "SELECT VALUE FROM V$PARAMETER WHERE UPPER(NAME) = UPPER(?)";
         return prepareQueryAndMap(query, ps -> ps.setString(1, parameterName), rs -> rs.next() ? rs.getString(1) : null);
@@ -909,11 +863,6 @@ public class OracleConnection extends JdbcConnection {
     private static Instant readTimestampAsInstant(ResultSet rs, String columnName) throws SQLException {
         final Timestamp value = rs.getTimestamp(columnName);
         return value == null ? null : value.toInstant();
-    }
-
-    @FunctionalInterface
-    interface ContainerWork<T> {
-        T execute() throws SQLException;
     }
 
     @FunctionalInterface

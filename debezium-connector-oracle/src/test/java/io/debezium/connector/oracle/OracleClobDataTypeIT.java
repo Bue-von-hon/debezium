@@ -36,7 +36,6 @@ import io.debezium.connector.oracle.junit.SkipTestDependingOnStrategyRule;
 import io.debezium.connector.oracle.junit.SkipWhenAdapterNameIs;
 import io.debezium.connector.oracle.junit.SkipWhenAdapterNameIsNot;
 import io.debezium.connector.oracle.junit.SkipWhenLogMiningStrategyIs;
-import io.debezium.connector.oracle.logminer.processor.TransactionCommitConsumer;
 import io.debezium.connector.oracle.util.TestHelper;
 import io.debezium.data.Envelope;
 import io.debezium.data.VerifyRecord;
@@ -1097,8 +1096,7 @@ public class OracleClobDataTypeIT extends AbstractAsyncEngineConnectorTest {
                 .with(OracleConnectorConfig.LOB_ENABLED, true)
                 .build();
 
-        LogInterceptor logminerLogInterceptor = new LogInterceptor(TransactionCommitConsumer.class);
-        final LogInterceptor xstreamLogInterceptor = new LogInterceptor("io.debezium.connector.oracle.xstream.LcrEventHandler");
+        final LogInterceptor logInterceptor = TestHelper.getEventCommitHandler();
         start(OracleConnector.class, config);
         assertConnectorIsRunning();
         waitForSnapshotToBeCompleted(TestHelper.CONNECTOR_NAME, TestHelper.SERVER_NAME);
@@ -1125,9 +1123,7 @@ public class OracleClobDataTypeIT extends AbstractAsyncEngineConnectorTest {
                 "dbms_lob.erase(loc_c, amount, 1); end;");
 
         // Wait until the log has recorded the message.
-        Awaitility.await().atMost(Duration.ofMinutes(1))
-                .until(() -> logminerLogInterceptor.containsWarnMessage("LOB_ERASE for table")
-                        || xstreamLogInterceptor.containsWarnMessage("LOB_ERASE for table"));
+        Awaitility.await().atMost(Duration.ofMinutes(1)).until(() -> logInterceptor.containsWarnMessage("LOB_ERASE for table"));
         assertNoRecordsToConsume();
     }
 
@@ -1540,7 +1536,7 @@ public class OracleClobDataTypeIT extends AbstractAsyncEngineConnectorTest {
     @Test
     @FixFor("DBZ-3645")
     public void shouldNotEmitClobFieldValuesWhenLobSupportIsNotEnabled() throws Exception {
-        boolean logMinerAdapter = TestHelper.adapter().equals(OracleConnectorConfig.ConnectorAdapter.LOG_MINER);
+        final boolean logMinerAdapter = TestHelper.isAnyLogMiner();
         TestHelper.dropTable(connection, "dbz3645");
         try {
             connection.execute("CREATE TABLE dbz3645 (id numeric(9,0), data clob, primary key(id))");
@@ -1572,12 +1568,14 @@ public class OracleClobDataTypeIT extends AbstractAsyncEngineConnectorTest {
             SourceRecord record = table.get(0);
             Struct after = ((Struct) record.value()).getStruct(Envelope.FieldName.AFTER);
             assertThat(after.get("ID")).isEqualTo(1);
-            assertThat(after.get("DATA")).isEqualTo(getUnavailableValuePlaceholder(config));
+            // During snapshot, LOB fields are always captured.
+            assertThat(after.get("DATA")).isEqualTo("Test1");
 
             record = table.get(1);
             after = ((Struct) record.value()).getStruct(Envelope.FieldName.AFTER);
             assertThat(after.get("ID")).isEqualTo(2);
-            assertThat(after.get("DATA")).isEqualTo(getUnavailableValuePlaceholder(config));
+            // During snapshot, LOB fields are always captured.
+            assertThat(after.get("DATA")).isEqualTo(getClobString(clob1));
 
             // Small data and large data
             connection.executeWithoutCommitting("INSERT INTO dbz3645 (id,data) values (3,'Test3')");
@@ -1920,7 +1918,7 @@ public class OracleClobDataTypeIT extends AbstractAsyncEngineConnectorTest {
 
     @Test
     @FixFor("DBZ-4366")
-    @SkipWhenAdapterNameIsNot(value = SkipWhenAdapterNameIsNot.AdapterName.LOGMINER, reason = "Xstream marks chunks as end of rows")
+    @SkipWhenAdapterNameIsNot(value = SkipWhenAdapterNameIsNot.AdapterName.ANY_LOGMINER, reason = "Xstream marks chunks as end of rows")
     public void shouldStreamClobsWrittenInChunkedMode() throws Exception {
         TestHelper.dropTable(connection, "dbz4366");
         try {
@@ -2040,7 +2038,7 @@ public class OracleClobDataTypeIT extends AbstractAsyncEngineConnectorTest {
 
     @Test
     @FixFor("DBZ-5266")
-    @SkipWhenAdapterNameIsNot(value = SkipWhenAdapterNameIsNot.AdapterName.LOGMINER, reason = "Commit SCN is only applicable to LogMiner")
+    @SkipWhenAdapterNameIsNot(value = SkipWhenAdapterNameIsNot.AdapterName.ANY_LOGMINER, reason = "Commit SCN is only applicable to LogMiner")
     public void shouldUpdateCommitScnOnLobTransaction() throws Exception {
         TestHelper.dropTable(connection, "dbz5266");
         try {
@@ -2093,7 +2091,7 @@ public class OracleClobDataTypeIT extends AbstractAsyncEngineConnectorTest {
 
     @Test
     @FixFor("DBZ-5266")
-    @SkipWhenAdapterNameIsNot(value = SkipWhenAdapterNameIsNot.AdapterName.LOGMINER, reason = "Commit SCN is only applicable to LogMiner")
+    @SkipWhenAdapterNameIsNot(value = SkipWhenAdapterNameIsNot.AdapterName.ANY_LOGMINER, reason = "Commit SCN is only applicable to LogMiner")
     public void shouldUpdateCommitScnOnNonLobTransactionWithLobEnabled() throws Exception {
         TestHelper.dropTable(connection, "dbz5266");
         try {
@@ -2135,7 +2133,7 @@ public class OracleClobDataTypeIT extends AbstractAsyncEngineConnectorTest {
 
     @Test
     @FixFor("DBZ-5266")
-    @SkipWhenAdapterNameIsNot(value = SkipWhenAdapterNameIsNot.AdapterName.LOGMINER, reason = "Commit SCN is only applicable to LogMiner")
+    @SkipWhenAdapterNameIsNot(value = SkipWhenAdapterNameIsNot.AdapterName.ANY_LOGMINER, reason = "Commit SCN is only applicable to LogMiner")
     public void shouldUpdateCommitScnOnNonLobTransactionWithLobDisabled() throws Exception {
         TestHelper.dropTable(connection, "dbz5266");
         try {

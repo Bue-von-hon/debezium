@@ -6,16 +6,23 @@
 package io.debezium.connector.common;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.kafka.connect.data.Schema;
+import org.apache.kafka.connect.data.SchemaBuilder;
+import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.errors.RetriableException;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTaskContext;
@@ -26,6 +33,7 @@ import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.config.Field;
 import io.debezium.pipeline.ChangeEventSourceCoordinator;
+import io.debezium.pipeline.ErrorHandler;
 import io.debezium.pipeline.spi.OffsetContext;
 import io.debezium.pipeline.spi.Partition;
 
@@ -63,6 +71,21 @@ public class BaseSourceTaskTest {
 
         assertEquals(1, baseSourceTask.startCount.get());
         assertEquals(1, baseSourceTask.stopCount.get());
+    }
+
+    @Test
+    public void verifyContainsChangeDataMessages() {
+        assertFalse(baseSourceTask.containsChangeDataMessages(null));
+        assertFalse(baseSourceTask.containsChangeDataMessages(List.of()));
+
+        Schema valueSchema = SchemaBuilder.struct()
+                .name("io.debezium.connector.common.Heartbeat.Envelope")
+                .field("name", Schema.STRING_SCHEMA)
+                .build();
+        SourceRecord sourceRecord = new SourceRecord(Collections.emptyMap(), Collections.emptyMap(), "dummy",
+                valueSchema, new Struct(valueSchema).put("name", "test"));
+
+        assertTrue(baseSourceTask.containsChangeDataMessages(List.of(sourceRecord)));
     }
 
     @Test
@@ -166,8 +189,18 @@ public class BaseSourceTaskTest {
         }
 
         @Override
+        protected String connectorName() {
+            return "";
+        }
+
+        @Override
         protected List<SourceRecord> doPoll() {
             return records;
+        }
+
+        @Override
+        protected Optional<ErrorHandler> getErrorHandler() {
+            return Optional.empty();
         }
 
         @Override
