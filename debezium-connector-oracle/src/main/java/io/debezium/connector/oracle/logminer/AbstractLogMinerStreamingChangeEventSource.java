@@ -90,6 +90,8 @@ public abstract class AbstractLogMinerStreamingChangeEventSource
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AbstractLogMinerStreamingChangeEventSource.class);
 
+    private static final String NO_REDO_SQL_FOR_TEMPORARY_TABLES = "/* No SQL_REDO for temporary tables */";
+
     private static final int MINING_START_RETRIES = 5;
     private static final int MAXIMUM_NAME_LENGTH = 30;
     private static final int MAX_ITERATIONS_BEFORE_OFFSET_STALE = 25;
@@ -141,7 +143,8 @@ public abstract class AbstractLogMinerStreamingChangeEventSource
         this.jdbcConfiguration = JdbcConfiguration.adapt(jdbcConfig);
         this.useContinuousMining = connectorConfig.isLogMiningContinuousMining(jdbcConnection.getOracleVersion());
         this.logCollector = new LogFileCollector(connectorConfig, jdbcConnection);
-        this.sessionContext = new LogMinerSessionContext(jdbcConnection, useContinuousMining, connectorConfig.getLogMiningStrategy());
+        this.sessionContext = new LogMinerSessionContext(jdbcConnection, useContinuousMining, connectorConfig.getLogMiningStrategy(),
+                connectorConfig.getLogMiningPathToDictionary());
         this.dmlParser = new LogMinerDmlParser(connectorConfig);
         this.reconstructColumnDmlParser = new LogMinerColumnResolverDmlParser(connectorConfig);
         this.selectLobParser = new SelectLobParser();
@@ -587,6 +590,15 @@ public abstract class AbstractLogMinerStreamingChangeEventSource
             }
         }
 
+        // There are some obscure corner cases where Oracle may mistakenly introduce a redo entry provided
+        // by LogMiner for temporary tables, which should not happen as they're officially unsupported nor
+        // are supported to be tracked by supplemental logging. Should any of these show up in the event
+        // stream, they should be gracefully discarded.
+        if (isNoSqlRedoForTemporaryTable(event)) {
+            Loggings.logDebugAndTraceRecord(LOGGER, event, "Skipped a change for a temporary table.");
+            return;
+        }
+
         getBatchMetrics().dataChangeEventObserved(event.getEventType());
 
         executeDataChangeEventPreDispatchSteps(event);
@@ -923,7 +935,7 @@ public abstract class AbstractLogMinerStreamingChangeEventSource
      *
      * @param scn the system change number to check, should never be {@code null}
      * @return {@code true} if archive log only mode and scn is available, {@code false} if connector is
-     *         not in archive log only mode or the connector is requesting to be shutdown
+     * not in archive log only mode or the connector is requesting to be shutdown
      * @throws SQLException if a database exception occurs
      * @throws InterruptedException if the thread is interrupted
      */
@@ -2092,6 +2104,10 @@ public abstract class AbstractLogMinerStreamingChangeEventSource
                 }
             }
         }
+    }
+
+    private boolean isNoSqlRedoForTemporaryTable(LogMinerEventRow event) {
+        return NO_REDO_SQL_FOR_TEMPORARY_TABLES.equals(event.getRedoSql());
     }
 
     private OracleOffsetContext emptyContext() {

@@ -49,14 +49,11 @@ import io.debezium.pipeline.ErrorHandler;
 import io.debezium.pipeline.notification.channels.SinkNotificationChannel;
 import io.debezium.pipeline.txmetadata.DefaultTransactionMetadataFactory;
 import io.debezium.pipeline.txmetadata.spi.TransactionMetadataFactory;
-import io.debezium.relational.CustomConverterRegistry;
 import io.debezium.relational.TableId;
 import io.debezium.schema.SchemaNameAdjuster;
 import io.debezium.schema.SchemaTopicNamingStrategy;
 import io.debezium.service.DefaultServiceRegistry;
 import io.debezium.service.spi.ServiceRegistry;
-import io.debezium.spi.converter.ConvertedField;
-import io.debezium.spi.converter.CustomConverter;
 import io.debezium.spi.schema.DataCollectionId;
 import io.debezium.spi.topic.TopicNamingStrategy;
 import io.debezium.util.Strings;
@@ -67,7 +64,6 @@ import io.debezium.util.Strings;
  * @author Gunnar Morling
  */
 public abstract class CommonConnectorConfig {
-    public static final String TASK_ID = "task.id";
     public static final Pattern TOPIC_NAME_PATTERN = Pattern.compile("^[a-zA-Z0-9_.\\-]+$");
     public static final String MULTI_PARTITION_MODE = "multi.partition.mode";
     public static final String SNAPSHOT_MODE_PROPERTY_NAME = "snapshot.mode";
@@ -568,14 +564,13 @@ public abstract class CommonConnectorConfig {
 
     // This should be less than the value of worker config task.shutdown.graceful.timeout.ms. It
     // defaults to 5 seconds, hence setting it to 4 seconds.
-    public static final long EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 4;
+    public static final Duration DEFAULT_EXECUTOR_SHUTDOWN_TIMEOUT = Duration.ofSeconds(4);
     public static final int DEFAULT_MAX_QUEUE_SIZE = 8192;
     public static final int DEFAULT_MAX_BATCH_SIZE = 2048;
     public static final int DEFAULT_QUERY_FETCH_SIZE = 0;
     public static final long DEFAULT_POLL_INTERVAL_MILLIS = 500;
-    public static final String DATABASE_CONFIG_PREFIX = "database.";
+    public static final String DATABASE_CONFIG_PREFIX = ConfigurationNames.DATABASE_CONFIG_PREFIX;
     public static final String DRIVER_CONFIG_PREFIX = "driver.";
-    private static final String CONVERTER_TYPE_SUFFIX = ".type";
     public static final long DEFAULT_RETRIABLE_RESTART_WAIT = 10000L;
     public static final long DEFAULT_MAX_QUEUE_SIZE_IN_BYTES = 0; // In case we don't want to pass max.queue.size.in.bytes;
     public static final String NOTIFICATION_CONFIGURATION_FIELD_PREFIX_STRING = "notification.";
@@ -585,7 +580,7 @@ public abstract class CommonConnectorConfig {
     public static final String ERRORS_MAX_RETRIES = "errors.max.retries";
     private final int maxRetriesOnError;
 
-    public static final Field TOPIC_PREFIX = Field.create("topic.prefix")
+    public static final Field TOPIC_PREFIX = Field.create(ConfigurationNames.TOPIC_PREFIX_PROPERTY_NAME)
             .withDisplayName("Topic prefix")
             .withType(Type.STRING)
             .withGroup(Field.createGroupEntry(Field.Group.CONNECTION, 0))
@@ -1100,6 +1095,150 @@ public abstract class CommonConnectorConfig {
             .withDescription("The maximum time in milliseconds to wait for connection validation to complete. Defaults to 60 seconds.")
             .withValidation(Field::isPositiveLong);
 
+    public static final Field EXECUTOR_SHUTDOWN_TIMEOUT_MS = Field.create("executor.shutdown.timeout.ms")
+            .withDisplayName("Executor shutdown timeout (ms)")
+            .withType(Type.LONG)
+            .withGroup(Field.createGroupEntry(Field.Group.ADVANCED, 19))
+            .withWidth(Width.MEDIUM)
+            .withImportance(Importance.MEDIUM)
+            .withDefault(DEFAULT_EXECUTOR_SHUTDOWN_TIMEOUT.toMillis())
+            .withDescription("The maximum time in milliseconds to wait for task executor to shut down.")
+            .withValidation(Field::isPositiveLong);
+
+    /**
+     * Configuration field to enable or disable OpenLineage integration.
+     *
+     * <p>When enabled, Debezium will emit data lineage metadata through the OpenLineage API,
+     * providing visibility into data flows and transformations performed by the connector.</p>
+     *
+     * <p><strong>Configuration key:</strong> {@code openlineage.integration.enabled}<br>
+     * <strong>Type:</strong> Boolean<br>
+     * <strong>Default:</strong> {@code false}<br>
+     * <strong>Importance:</strong> Low</p>
+     */
+    public static Field OPEN_LINEAGE_INTEGRATION_ENABLED = Field.create(OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_ENABLED)
+            .withDisplayName("Enables OpenLineage integration")
+            .withGroup(Field.createGroupEntry(Field.Group.ADVANCED, 40))
+            .withType(ConfigDef.Type.BOOLEAN)
+            .withWidth(ConfigDef.Width.SHORT)
+            .withImportance(ConfigDef.Importance.LOW)
+            .withDescription("Enable Debezium to emit data lineage metadata through OpenLineage API")
+            .withDefault(false);
+
+    /**
+     * Configuration field specifying the path to the OpenLineage configuration file.
+     *
+     * <p>This file contains OpenLineage client configuration settings such as transport
+     * configuration, backend settings, and other OpenLineage-specific options.</p>
+     *
+     * <p><strong>Configuration key:</strong> {@code openlineage.integration.config.file.path}<br>
+     * <strong>Type:</strong> String<br>
+     * <strong>Default:</strong> {@code ./openlineage.yml}<br>
+     * <strong>Importance:</strong> Low</p>
+     *
+     * @see <a href="https://openlineage.io/docs/client/java/configuration">OpenLineage Configuration Documentation</a>
+     */
+    public static Field OPEN_LINEAGE_INTEGRATION_CONFIG_FILE_PATH = Field.create(OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_CONFIG_FILE_PATH)
+            .withDisplayName("Path to OpenLineage file configuration")
+            .withGroup(Field.createGroupEntry(Field.Group.ADVANCED, 41))
+            .withType(ConfigDef.Type.STRING)
+            .withWidth(ConfigDef.Width.LONG)
+            .withImportance(ConfigDef.Importance.LOW)
+            .withDefault("./openlineage.yml")
+            .withDescription("Path to OpenLineage file configuration. See https://openlineage.io/docs/client/java/configuration");
+
+    /**
+     * Configuration field defining the namespace for the Debezium job in OpenLineage.
+     *
+     * <p>The namespace is used to organize and categorize jobs within the OpenLineage
+     * metadata system. It helps in identifying and grouping related data pipeline jobs.</p>
+     *
+     * <p><strong>Configuration key:</strong> {@code openlineage.integration.job.namespace}<br>
+     * <strong>Type:</strong> String<br>
+     * <strong>Default:</strong> None<br>
+     * <strong>Importance:</strong> Low</p>
+     */
+    public static Field OPEN_LINEAGE_INTEGRATION_JOB_NAMESPACE = Field.create(OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_NAMESPACE)
+            .withDisplayName("Namespace used for Debezium job")
+            .withGroup(Field.createGroupEntry(Field.Group.ADVANCED, 42))
+            .withType(ConfigDef.Type.STRING)
+            .withWidth(ConfigDef.Width.LONG)
+            .withImportance(ConfigDef.Importance.LOW)
+            .withDescription("The job's namespace emitted by Debezium");
+
+    /**
+     * Configuration field providing a human-readable description for the Debezium job.
+     *
+     * <p>This description appears in OpenLineage metadata and helps users understand
+     * the purpose and function of the specific Debezium connector job.</p>
+     *
+     * <p><strong>Configuration key:</strong> {@code openlineage.integration.job.description}<br>
+     * <strong>Type:</strong> String<br>
+     * <strong>Default:</strong> {@code "Debezium change data capture job"}<br>
+     * <strong>Importance:</strong> Low</p>
+     */
+    public static Field OPEN_LINEAGE_INTEGRATION_JOB_DESCRIPTION = Field.create(OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_DESCRIPTION)
+            .withDisplayName("Description used for Debezium job")
+            .withGroup(Field.createGroupEntry(Field.Group.ADVANCED, 43))
+            .withType(ConfigDef.Type.STRING)
+            .withWidth(ConfigDef.Width.LONG)
+            .withImportance(ConfigDef.Importance.LOW)
+            .withDescription("The job's description emitted by Debezium")
+            .withDefault("Debezium change data capture job");
+
+    /**
+     * Configuration field for specifying tags associated with the Debezium job.
+     *
+     * <p>Tags provide additional metadata and categorization for the job in OpenLineage.
+     * They are specified as a comma-separated list of key-value pairs.</p>
+     *
+     * <p><strong>Configuration key:</strong> {@code openlineage.integration.job.tags}<br>
+     * <strong>Type:</strong> List<br>
+     * <strong>Format:</strong> Comma-separated key-value pairs (e.g., {@code k1=v1,k2=v2})<br>
+     * <strong>Default:</strong> None<br>
+     * <strong>Importance:</strong> Low</p>
+     *
+     * <p><strong>Example:</strong>
+     * <pre>{@code
+     * openlineage.integration.job.tags=environment=production,team=data-engineering
+     * }</pre>
+     */
+    public static Field OPEN_LINEAGE_INTEGRATION_JOB_TAGS = Field.create(OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_TAGS)
+            .withDisplayName("Debezium job tags")
+            .withGroup(Field.createGroupEntry(Field.Group.ADVANCED, 44))
+            .withType(ConfigDef.Type.LIST)
+            .withWidth(ConfigDef.Width.LONG)
+            .withImportance(ConfigDef.Importance.LOW)
+            .withValidation(Field::isListOfMap)
+            .withDescription("The job's tags emitted by Debezium. A comma-separated list of key-value pairs.For example: k1=v1,k2=v2");
+
+    /**
+     * Configuration field for specifying the owners of the Debezium job.
+     *
+     * <p>Owners identify who is responsible for the job and can be used for contact
+     * information, governance, and accountability within the OpenLineage metadata system.
+     * They are specified as a comma-separated list of key-value pairs.</p>
+     *
+     * <p><strong>Configuration key:</strong> {@code openlineage.integration.job.owners}<br>
+     * <strong>Type:</strong> List<br>
+     * <strong>Format:</strong> Comma-separated key-value pairs (e.g., {@code k1=v1,k2=v2})<br>
+     * <strong>Default:</strong> None<br>
+     * <strong>Importance:</strong> Low</p>
+     *
+     * <p><strong>Example:</strong>
+     * <pre>{@code
+     * openlineage.integration.job.owners=email=team@company.com,slack=data-team
+     * }</pre>
+     */
+    public static Field OPEN_LINEAGE_INTEGRATION_JOB_OWNERS = Field.create(OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_OWNERS)
+            .withDisplayName("Debezium job owners")
+            .withGroup(Field.createGroupEntry(Field.Group.ADVANCED, 45))
+            .withType(ConfigDef.Type.LIST)
+            .withWidth(ConfigDef.Width.LONG)
+            .withImportance(ConfigDef.Importance.LOW)
+            .withValidation(Field::isListOfMap)
+            .withDescription("The job's owners emitted by Debezium. A comma-separated list of key-value pairs.For example: k1=v1,k2=v2");
+
     protected static final ConfigDefinition CONFIG_DEFINITION = ConfigDefinition.editor()
             .connector(
                     EVENT_PROCESSING_FAILURE_HANDLING_MODE,
@@ -1127,12 +1266,13 @@ public abstract class CommonConnectorConfig {
                     LOG_POSITION_CHECK_ENABLED,
                     ADVANCED_METRICS_ENABLE,
                     CONNECTION_VALIDATION_TIMEOUT_MS,
-                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_ENABLED,
-                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_CONFIG_FILE_PATH,
-                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_NAMESPACE,
-                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_DESCRIPTION,
-                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_TAGS,
-                    OpenLineageConfig.OPEN_LINEAGE_INTEGRATION_JOB_OWNERS)
+                    EXECUTOR_SHUTDOWN_TIMEOUT_MS,
+                    OPEN_LINEAGE_INTEGRATION_ENABLED,
+                    OPEN_LINEAGE_INTEGRATION_CONFIG_FILE_PATH,
+                    OPEN_LINEAGE_INTEGRATION_JOB_NAMESPACE,
+                    OPEN_LINEAGE_INTEGRATION_JOB_DESCRIPTION,
+                    OPEN_LINEAGE_INTEGRATION_JOB_TAGS,
+                    OPEN_LINEAGE_INTEGRATION_JOB_OWNERS)
             .events(
                     CUSTOM_CONVERTERS,
                     CUSTOM_POST_PROCESSORS,
@@ -1172,7 +1312,6 @@ public abstract class CommonConnectorConfig {
     private final TransactionMetadataFactory transactionMetadataFactory;
     private final boolean shouldProvideTransactionMetadata;
     private final EventProcessingFailureHandlingMode eventProcessingFailureHandlingMode;
-    private final CustomConverterRegistry customConverterRegistry;
     private final BinaryHandlingMode binaryHandlingMode;
     private final SchemaNameAdjustmentMode schemaNameAdjustmentMode;
     private final FieldNameAdjustmentMode fieldNameAdjustmentMode;
@@ -1224,13 +1363,12 @@ public abstract class CommonConnectorConfig {
         this.transactionMetadataFactory = getTransactionMetadataFactory();
         this.shouldProvideTransactionMetadata = config.getBoolean(PROVIDE_TRANSACTION_METADATA);
         this.eventProcessingFailureHandlingMode = EventProcessingFailureHandlingMode.parse(config.getString(EVENT_PROCESSING_FAILURE_HANDLING_MODE));
-        this.customConverterRegistry = new CustomConverterRegistry(getCustomConverters());
         this.binaryHandlingMode = BinaryHandlingMode.parse(config.getString(BINARY_HANDLING_MODE));
         this.signalingDataCollection = config.getString(SIGNAL_DATA_COLLECTION);
         this.signalPollInterval = Duration.ofMillis(config.getLong(SIGNAL_POLL_INTERVAL_MS));
         this.signalEnabledChannels = getSignalEnabledChannels(config);
         this.skippedOperations = determineSkippedOperations(config);
-        this.taskId = config.getString(TASK_ID);
+        this.taskId = config.getString(ConfigurationNames.TASK_ID_PROPERTY_NAME);
         this.notificationTopicName = config.getString(SinkNotificationChannel.NOTIFICATION_TOPIC);
         this.enabledNotificationChannels = config.getList(NOTIFICATION_ENABLED_CHANNELS);
         this.skipMessagesWithoutChange = config.getBoolean(SKIP_MESSAGES_WITHOUT_CHANGE);
@@ -1386,10 +1524,6 @@ public abstract class CommonConnectorConfig {
         return eventProcessingFailureHandlingMode;
     }
 
-    public CustomConverterRegistry customConverterRegistry() {
-        return customConverterRegistry;
-    }
-
     /**
      * Whether a particular connector supports an optimized way for implementing operation skipping, or not.
      */
@@ -1421,20 +1555,6 @@ public abstract class CommonConnectorConfig {
         }
         LOGGER.info("Loading the custom topic naming strategy plugin: {}", strategyName);
         return topicNamingStrategy;
-    }
-
-    @SuppressWarnings("unchecked")
-    private List<CustomConverter<SchemaBuilder, ConvertedField>> getCustomConverters() {
-        final String converterNameList = config.getString(CUSTOM_CONVERTERS);
-        final List<String> converterNames = Strings.listOf(converterNameList, x -> x.split(","), String::trim);
-
-        return converterNames.stream()
-                .map(name -> {
-                    CustomConverter<SchemaBuilder, ConvertedField> converter = config.getInstance(name + CONVERTER_TYPE_SUFFIX, CustomConverter.class);
-                    converter.configure(config.subset(name, true).asProperties());
-                    return converter;
-                })
-                .collect(Collectors.toList());
     }
 
     @SuppressWarnings("unchecked")
@@ -1622,6 +1742,10 @@ public abstract class CommonConnectorConfig {
         return Duration.ofMillis(config.getLong(CONNECTION_VALIDATION_TIMEOUT_MS));
     }
 
+    public Duration getExecutorShutdownTimeout() {
+        return Duration.ofMillis(config.getLong(EXECUTOR_SHUTDOWN_TIMEOUT_MS));
+    }
+
     public EnumeratedValue snapshotQueryMode() {
         return this.snapshotQueryMode;
     }
@@ -1696,12 +1820,17 @@ public abstract class CommonConnectorConfig {
         return taskId;
     }
 
+    /**
+     * @deprecated Use {@link io.debezium.heartbeat.HeartbeatFactory} instead.
+     */
+    @Deprecated
     public Heartbeat createHeartbeat(TopicNamingStrategy topicNamingStrategy, SchemaNameAdjuster schemaNameAdjuster,
                                      HeartbeatConnectionProvider connectionProvider, HeartbeatErrorHandler errorHandler) {
         if (getHeartbeatInterval().isZero()) {
             return Heartbeat.DEFAULT_NOOP_HEARTBEAT;
         }
         return new HeartbeatImpl(getHeartbeatInterval(), topicNamingStrategy.heartbeatTopic(), getLogicalName(), schemaNameAdjuster);
+
     }
 
     public static int validateTopicName(Configuration config, Field field, ValidationOutput problems) {

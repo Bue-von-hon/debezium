@@ -16,7 +16,7 @@ import org.apache.kafka.connect.data.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.debezium.connector.common.BaseSourceTask;
+import io.debezium.connector.common.DebeziumTaskState;
 import io.debezium.openlineage.DebeziumOpenLineageEmitter;
 import io.debezium.openlineage.dataset.DatasetMetadata;
 import io.debezium.relational.Key.KeyMapper;
@@ -129,7 +129,7 @@ public abstract class RelationalDatabaseSchema implements DatabaseSchema<TableId
         if (tableFilter.isIncluded(table.id())) {
             TableSchema schema = schemaBuilder.create(topicNamingStrategy, table, columnFilter, columnMappers, customKeysMapper);
             schemasByTableId.put(table.id(), schema);
-            DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(config.getConfig(), config.getConnectorName()), BaseSourceTask.State.RUNNING,
+            DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(config.getConfig().asMap(), config.getConnectorName()), DebeziumTaskState.RUNNING,
                     List.of(extractDatasetMetadata(table)));
         }
     }
@@ -139,8 +139,18 @@ public abstract class RelationalDatabaseSchema implements DatabaseSchema<TableId
         List<DatasetMetadata.FieldDefinition> fieldDefinitions = table.columns().stream()
                 .map(c -> new DatasetMetadata.FieldDefinition(c.name(), c.typeName(), c.comment()))
                 .toList();
+        return new DatasetMetadata(getIdentifier(table), INPUT, fieldDefinitions);
+    }
 
-        return new DatasetMetadata(table.id().identifier(), INPUT, fieldDefinitions);
+    private String getIdentifier(Table table) {
+
+        String dbName = config.getJdbcConfig().getDatabase() == null ? "" : config.getJdbcConfig().getDatabase();
+
+        if (table.id().catalog() == null) {
+            return dbName + "." + table.id().identifier();
+        }
+
+        return table.id().identifier();
     }
 
     protected void removeSchema(TableId id) {

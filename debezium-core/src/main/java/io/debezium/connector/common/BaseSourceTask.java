@@ -20,6 +20,7 @@ import java.util.Optional;
 import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
@@ -39,6 +40,7 @@ import io.debezium.annotation.VisibleForTesting;
 import io.debezium.config.CommonConnectorConfig;
 import io.debezium.config.Configuration;
 import io.debezium.config.Field;
+import io.debezium.converters.custom.CustomConverterServiceProvider;
 import io.debezium.data.Envelope;
 import io.debezium.function.LogPositionValidator;
 import io.debezium.openlineage.DebeziumOpenLineageEmitter;
@@ -170,14 +172,7 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
         return logPositionValidator.validate(partition, offsetContext, config);
     }
 
-    public enum State {
-        RESTARTING,
-        RUNNING,
-        INITIAL,
-        STOPPED
-    }
-
-    private final AtomicReference<State> state = new AtomicReference<>(State.INITIAL);
+    private final AtomicReference<DebeziumTaskState> state = new AtomicReference<>(DebeziumTaskState.INITIAL);
 
     /**
      * Used to ensure that start(), stop() and commitRecord() calls are serialized.
@@ -210,6 +205,8 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
     @SingleThreadAccess("polling thread")
     private int previousOutputBatchSize;
 
+    protected final AtomicBoolean shouldPerformCommit = new AtomicBoolean(false);
+
     private final ServiceLoader<SignalChannelReader> availableSignalChannels = ServiceLoader.load(SignalChannelReader.class);
 
     private final List<NotificationChannel> notificationChannels;
@@ -239,11 +236,11 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
         stateLock.lock();
 
         try {
-            setTaskState(State.INITIAL);
+            setTaskState(DebeziumTaskState.INITIAL);
             config = Configuration.from(props);
 
-            DebeziumOpenLineageEmitter.init(config, connectorName());
-            DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(config, connectorName()), State.INITIAL);
+            DebeziumOpenLineageEmitter.init(props, connectorName());
+            DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(props, connectorName()), DebeziumTaskState.INITIAL);
 
             retriableRestartWait = config.getDuration(CommonConnectorConfig.RETRIABLE_RESTART_WAIT, ChronoUnit.MILLIS);
             // need to reset the delay or you only get one delayed restart
@@ -262,15 +259,15 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
             }
             try {
                 this.coordinator = start(config);
-                setTaskState(State.RUNNING);
+                setTaskState(DebeziumTaskState.RUNNING);
 
-                DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(config, connectorName()), State.RUNNING);
+                DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(props, connectorName()), DebeziumTaskState.RUNNING);
 
             }
             catch (RetriableException e) {
                 LOGGER.warn("Failed to start connector, will re-attempt during polling.", e);
                 restartDelay = ElapsedTimeStrategy.constant(Clock.system(), retriableRestartWait);
-                setTaskState(State.RESTARTING);
+                setTaskState(DebeziumTaskState.RESTARTING);
             }
         }
         finally {
@@ -328,6 +325,10 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
             // in we fail to start, return empty list and try to start next poll() method call
             if (!startIfNeededAndPossible()) {
                 return Collections.emptyList();
+            }
+            // it's safe to flush offsets here as we are in the running state
+            if (shouldPerformCommit.getAndSet(false)) {
+                performCommit();
             }
 
             final List<SourceRecord> records = doPoll();
@@ -424,16 +425,18 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
 
         boolean result = false;
         try {
-            State currentState = getTaskState();
-            if (currentState == State.RUNNING) {
+            DebeziumTaskState currentState = getTaskState();
+            if (currentState == DebeziumTaskState.RUNNING) {
                 result = true;
             }
-            else if (currentState == State.RESTARTING) {
+            else if (currentState == DebeziumTaskState.RESTARTING) {
 
                 getErrorHandler().ifPresentOrElse(
-                        handler -> DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(config, connectorName()), State.RESTARTING,
+                        handler -> DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(config.asMap(), connectorName()),
+                                DebeziumTaskState.RESTARTING,
                                 handler.getProducerThrowable()),
-                        () -> DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(config, connectorName()), State.RESTARTING));
+                        () -> DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(config.asMap(), connectorName()),
+                                DebeziumTaskState.RESTARTING));
 
                 // we're in restart mode... check if it's time to restart
                 if (restartDelay.hasElapsed()) {
@@ -441,7 +444,7 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
                     this.coordinator = start(config);
                     LOGGER.info("Successfully restarted task");
                     restartDelay = null;
-                    setTaskState(State.RUNNING);
+                    setTaskState(DebeziumTaskState.RUNNING);
                     result = true;
                 }
                 else {
@@ -458,8 +461,9 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
 
     @Override
     public final void stop() {
+        performCommit();
         stop(false);
-        DebeziumOpenLineageEmitter.cleanup(DebeziumOpenLineageEmitter.connectorContext(config, connectorName()));
+        DebeziumOpenLineageEmitter.cleanup(DebeziumOpenLineageEmitter.connectorContext(config.asMap(), connectorName()));
     }
 
     private void stop(boolean restart) {
@@ -488,14 +492,14 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
             doStop();
 
             if (restart) {
-                setTaskState(State.RESTARTING);
+                setTaskState(DebeziumTaskState.RESTARTING);
                 if (restartDelay == null) {
                     restartDelay = ElapsedTimeStrategy.constant(Clock.system(), retriableRestartWait);
                 }
             }
             else {
-                setTaskState(State.STOPPED);
-                DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(config, connectorName()), State.STOPPED);
+                setTaskState(DebeziumTaskState.STOPPED);
+                DebeziumOpenLineageEmitter.emit(DebeziumOpenLineageEmitter.connectorContext(config.asMap(), connectorName()), DebeziumTaskState.STOPPED);
             }
         }
         finally {
@@ -517,6 +521,10 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
 
     @Override
     public void commit() throws InterruptedException {
+        shouldPerformCommit.set(true);
+    }
+
+    public void performCommit() {
         boolean locked = stateLock.tryLock();
 
         if (locked) {
@@ -584,13 +592,13 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
      *
      * @param newState
      */
-    private void setTaskState(State newState) {
-        State oldState = state.getAndSet(newState);
+    private void setTaskState(DebeziumTaskState newState) {
+        DebeziumTaskState oldState = state.getAndSet(newState);
         LOGGER.debug("Setting task state to '{}', previous state was '{}'", newState, oldState);
     }
 
     @VisibleForTesting
-    public State getTaskState() {
+    public DebeziumTaskState getTaskState() {
         stateLock.lock();
         try {
             return state.get();
@@ -610,5 +618,6 @@ public abstract class BaseSourceTask<P extends Partition, O extends OffsetContex
         serviceRegistry.registerServiceProvider(new SnapshotQueryProvider());
         serviceRegistry.registerServiceProvider(new SnapshotterServiceProvider());
         serviceRegistry.registerServiceProvider(new DebeziumHeaderProducerProvider());
+        serviceRegistry.registerServiceProvider(new CustomConverterServiceProvider());
     }
 }

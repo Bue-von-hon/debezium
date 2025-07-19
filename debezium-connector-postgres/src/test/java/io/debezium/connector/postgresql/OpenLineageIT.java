@@ -168,8 +168,8 @@ public class OpenLineageIT extends AbstractAsyncEngineConnectorTest {
         assertEventContainsExpectedData(runningEvents.get(0));
         assertEventContainsExpectedData(runningEvents.get(1));
 
-        assertCorrectInputDataset(runningEvents.get(1).getInputs(), "s1.a", List.of("pk;serial", "aa;int4"));
-        assertCorrectInputDataset(runningEvents.get(2).getInputs(), "s2.a", List.of("pk;serial", "aa;int4"));
+        assertCorrectInputDataset(runningEvents.get(1).getInputs(), "postgres.s1.a", List.of("pk;serial", "aa;int4"));
+        assertCorrectInputDataset(runningEvents.get(2).getInputs(), "postgres.s2.a", List.of("pk;serial", "aa;int4"));
 
     }
 
@@ -204,9 +204,9 @@ public class OpenLineageIT extends AbstractAsyncEngineConnectorTest {
         assertThat(runningEvents).hasSize(expected);
 
         String pkValue = decoderPlugin() == PostgresConnectorConfig.LogicalDecoder.PGOUTPUT ? "int4" : "serial";
-        assertCorrectInputDataset(runningEvents.get(1).getInputs(), "s1.a", List.of("pk;serial", "aa;int4"));
-        assertCorrectInputDataset(runningEvents.get(2).getInputs(), "s2.a", List.of("pk;serial", "aa;int4"));
-        assertCorrectInputDataset(runningEvents.get(5).getInputs(), "s1.a", List.of("pk;" + pkValue, "aa;int4", "bb;varchar"));
+        assertCorrectInputDataset(runningEvents.get(1).getInputs(), "postgres.s1.a", List.of("pk;serial", "aa;int4"));
+        assertCorrectInputDataset(runningEvents.get(2).getInputs(), "postgres.s2.a", List.of("pk;serial", "aa;int4"));
+        assertCorrectInputDataset(runningEvents.get(5).getInputs(), "postgres.s1.a", List.of("pk;" + pkValue, "aa;int4", "bb;varchar"));
     }
 
     @Test
@@ -351,7 +351,7 @@ public class OpenLineageIT extends AbstractAsyncEngineConnectorTest {
     private static void assertCorrectInputDataset(List<OpenLineage.InputDataset> inputs, String expectedName, List<String> expectedFields) {
         assertThat(inputs).hasSize(1);
         assertThat(inputs.get(0).getName()).isEqualTo(expectedName);
-        assertThat(inputs.get(0).getNamespace()).isEqualTo("postgres://localhost:5432");
+        assertThat(inputs.get(0).getNamespace()).startsWith("postgres://localhost:");
         List<OpenLineage.SchemaDatasetFacetFields> tableFields = inputs.get(0).getFacets().getSchema().getFields();
         List<String> actualFields = tableFields.stream().map(f -> String.format("%s;%s", f.getName(), f.getType())).toList();
         assertThat(actualFields).containsAll(expectedFields);
@@ -453,7 +453,6 @@ public class OpenLineageIT extends AbstractAsyncEngineConnectorTest {
                 "database.dbname=postgres",
                 "database.hostname=localhost",
                 "database.password=postgres",
-                "database.port=5432",
                 "database.sslmode=disable",
                 "database.user=postgres",
                 "errors.max.retries=-1",
