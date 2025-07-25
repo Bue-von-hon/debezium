@@ -112,6 +112,90 @@ public class MySqlConnectorNoBlobIT extends AbstractAsyncEngineConnectorTest {
         });
     }
 
+    /**
+     * Test that both before and after sections exclude BLOB/TEXT columns in UPDATE operations
+     * when binlog_row_image=NOBLOB mode is enabled.
+     */
+    @Test
+    public void textAndBlobColumnShouldNotBeContainedInBeforeAndAfterSectionsDuringUpdate() throws InterruptedException, SQLException {
+        // Use the DB configuration to define the connector's configuration.
+        config = simpleConfig()
+                .build();
+
+        // Start the connector.
+        start(MySqlConnector.class, config);
+
+        // Wait for snapshot to complete
+        final int snapshotExpected = 15;
+        consumeAtLeast(snapshotExpected);
+
+        // Clear the store to focus on UPDATE operations
+        store = KeyValueStore.createForTopicsBeginningWith(DATABASE.getServerName() + '.');
+
+        // Perform UPDATE operations that would normally trigger before/after sections
+        try (MySqlTestConnection db = MySqlTestConnection.forTestDatabase(DATABASE.getDatabaseName())) {
+            db.execute("UPDATE Products SET name = 'updated-scooter' WHERE id = 1");
+            db.execute("UPDATE Products SET name = 'updated-battery' WHERE id = 2");
+            db.execute("UPDATE Products SET name = 'updated-drill-bits' WHERE id = 3");
+        }
+
+        // Poll for UPDATE records
+        final int updateExpected = 3;
+        final int consumed = consumeAtLeast(updateExpected);
+
+        assertThat(consumed).isGreaterThanOrEqualTo(updateExpected);
+        final KeyValueStore.Collection products = store.collection(DATABASE.getDatabaseName(), productsTableName());
+        
+        final List<Struct> beforeImages = new ArrayList<>();
+        final List<Struct> afterImages = new ArrayList<>();
+
+        // Extract both before and after images from UPDATE records
+        products.forEach(val -> {
+            final Struct value = (Struct) val.value();
+            final Struct beforeImage = value.getStruct("before");
+            final Struct afterImage = value.getStruct("after");
+            
+            if (beforeImage != null) {
+                beforeImages.add(beforeImage);
+            }
+            if (afterImage != null) {
+                afterImages.add(afterImage);
+            }
+        });
+
+        // Verify that we have the expected number of before/after images
+        assertThat(beforeImages).hasSize(updateExpected);
+        assertThat(afterImages).hasSize(updateExpected);
+
+        // Check that before images do not contain BLOB/TEXT columns
+        beforeImages.forEach(beforeImage -> {
+            final Schema schema = beforeImage.schema();
+            final List<Field> fields = schema.fields();
+            assertThat(fields).hasSize(2); // Should only have 'id' and 'name' fields
+            fields.forEach(field -> {
+                assertThat(field.name()).isNotEqualTo("description");
+                assertThat(field.name()).isIn("id", "name");
+            });
+        });
+
+        // Check that after images do not contain BLOB/TEXT columns
+        afterImages.forEach(afterImage -> {
+            final Schema schema = afterImage.schema();
+            final List<Field> fields = schema.fields();
+            assertThat(fields).hasSize(2); // Should only have 'id' and 'name' fields
+            fields.forEach(field -> {
+                assertThat(field.name()).isNotEqualTo("description");
+                assertThat(field.name()).isIn("id", "name");
+            });
+        });
+
+        // Verify that the updates were captured correctly (name field should be updated)
+        afterImages.forEach(afterImage -> {
+            final String name = afterImage.getString("name");
+            assertThat(name).startsWith("updated-");
+        });
+    }
+
     private int consumeAtLeast(int minNumber) throws InterruptedException {
         final SourceRecords records = consumeRecordsByTopic(minNumber);
         final int count = records.allRecordsInOrder().size();
