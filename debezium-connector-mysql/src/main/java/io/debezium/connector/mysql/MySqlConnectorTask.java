@@ -213,8 +213,7 @@ public class MySqlConnectorTask extends BinlogSourceTask<MySqlPartition, MySqlOf
                         queue),
                 schemaNameAdjuster,
                 signalProcessor,
-                debeziumHeaderProducer
-        );
+                debeziumHeaderProducer);
 
         final MySqlStreamingChangeEventSourceMetrics streamingMetrics = new MySqlStreamingChangeEventSourceMetrics(taskContext, queue, metadataProvider);
 

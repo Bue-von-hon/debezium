@@ -145,7 +145,7 @@ public class MySqlConnectorNoBlobIT extends AbstractAsyncEngineConnectorTest {
 
         assertThat(consumed).isGreaterThanOrEqualTo(updateExpected);
         final KeyValueStore.Collection products = store.collection(DATABASE.getDatabaseName(), productsTableName());
-        
+
         final List<Struct> beforeImages = new ArrayList<>();
         final List<Struct> afterImages = new ArrayList<>();
 
@@ -154,7 +154,7 @@ public class MySqlConnectorNoBlobIT extends AbstractAsyncEngineConnectorTest {
             final Struct value = (Struct) val.value();
             final Struct beforeImage = value.getStruct("before");
             final Struct afterImage = value.getStruct("after");
-            
+
             if (beforeImage != null) {
                 beforeImages.add(beforeImage);
             }
